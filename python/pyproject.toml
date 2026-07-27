@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "layercall"
+version = "1.0.0"
+description = "Official LayerCall client — score an IP, email, phone, domain or a whole signup for fraud in one call. Zero dependencies."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "LayerCall" }]
+keywords = ["fraud", "fraud-detection", "vpn-detection", "proxy-detection", "tor", "email-validation", "disposable-email", "phone-validation", "ip-lookup", "bot-detection", "signup-fraud", "risk-score"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+  "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://www.layercall.com"
+Documentation = "https://www.layercall.com/docs"
+Source = "https://github.com/hirajha/layercall-sdk"
+
+[tool.setuptools.packages.find]
+include = ["layercall*"]

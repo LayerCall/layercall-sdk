@@ -1,0 +1,57 @@
+{
+  "name": "layercall",
+  "version": "1.0.0",
+  "description": "Official LayerCall client \u2014 score an IP, email, phone, domain or a whole signup for fraud in one call. Zero dependencies.",
+  "keywords": [
+    "fraud",
+    "fraud-detection",
+    "vpn-detection",
+    "proxy-detection",
+    "tor",
+    "email-validation",
+    "disposable-email",
+    "phone-validation",
+    "ip-lookup",
+    "ip-geolocation",
+    "bot-detection",
+    "signup-fraud",
+    "risk-score"
+  ],
+  "homepage": "https://www.layercall.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hirajha/layercall.git",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://www.layercall.com/contact"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "bin": {
+    "layercall": "./dist/cli.js"
+  }
+}
