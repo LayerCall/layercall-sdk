@@ -20,8 +20,8 @@
   "homepage": "https://www.layercall.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hirajha/layercall.git",
-    "directory": "sdk"
+    "url": "git+https://github.com/hirajha/layercall-sdk.git",
+    "directory": "node"
   },
   "bugs": {
     "url": "https://www.layercall.com/contact"
@@ -35,6 +35,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
     }
   },
   "files": [

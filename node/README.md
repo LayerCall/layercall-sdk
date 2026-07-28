@@ -119,3 +119,119 @@ new LayerCall({
 ## License
 
 MIT
+
+## Express
+
+```bash
+npm install layercall
+```
+
+```js
+import { layercall } from "layercall/express";
+
+app.post("/signup", layercall(), async (req, res) => {
+  if (req.trust.verdict === "block") {
+    return res.status(403).json({ error: "Could not verify this signup." });
+  }
+  if (req.trust.verdict === "review") {
+    await flagForReview(req.body.email, req.trust.top_signals);
+  }
+  await createAccount(req.body);
+});
+```
+
+Reads `LAYERCALL_API_KEY` from the environment, pulls `email` / `phone` /
+`domain` / `device_id` out of `req.body`, and attaches the verdict as
+`req.trust`.
+
+**Mount it per route, not with `app.use()`.** Mounted globally it bills a
+lookup for every POST your app receives, including ones that have nothing to do
+with signing up.
+
+**Set `trust proxy` if you run behind a CDN or load balancer.** Without it
+Express reports the proxy's address, so every visitor looks like the same IP —
+and that one IP accumulates every signal from every user, which is worse than
+sending no IP at all.
+
+```js
+app.set("trust proxy", true);
+```
+
+### It never blocks for you
+
+There is no `autoBlock` option. `req.trust` carries the verdict; the line that
+rejects somebody is one you write. A one-line install that silently starts
+refusing real customers is the wrong default for a fraud tool — you would find
+out from a support ticket.
+
+If you want the middleware to answer directly, pass `onBlock` and return `true`
+once you have sent a response:
+
+```js
+layercall({
+  onBlock: (req, res) => {
+    res.status(403).json({ error: "Could not verify this signup." });
+    return true; // handled — the route is not reached
+  },
+});
+```
+
+### It fails open
+
+If LayerCall is unreachable, slow, or the account is over quota, the request
+continues with `verdict: "allow"` and `scored: false`. A fraud check that takes
+signups offline during an outage costs more than the fraud it was bought to
+stop, and it hits every legitimate user at once rather than a few bad ones.
+
+Branch on `scored` before doing anything punitive, and log it — a fallback
+always reads `allow`, so code that only inspects `verdict` will let everything
+through during an outage without ever saying so.
+
+```js
+if (!req.trust.scored) log.warn("layercall unavailable", req.trust.error);
+```
+
+### Options
+
+| Option | Default | |
+|---|---|---|
+| `apiKey` | `process.env.LAYERCALL_API_KEY` | |
+| `timeoutMs` | `2000` | sits in the request's critical path |
+| `strictness` | API default | `0`–`3`; shifts the verdict, not the score |
+| `shouldScore` | POST/PUT/PATCH | return `false` to skip a request |
+| `extract` | reads `req.body` | pull the fields from somewhere else |
+| `onBlock` | — | respond yourself; return `true` if handled |
+| `property` | `"trust"` | rename `req.trust` |
+
+## Next.js (App Router)
+
+```js
+import { scoreRequest } from "layercall/next";
+
+export async function POST(req) {
+  const trust = await scoreRequest(req);
+  if (trust.verdict === "block") {
+    return Response.json({ error: "Could not verify" }, { status: 403 });
+  }
+  const { email } = await req.json(); // body is still readable
+  return Response.json(await createAccount(email));
+}
+```
+
+Or wrap the handler:
+
+```js
+import { withTrust } from "layercall/next";
+
+export const POST = withTrust(async (req, trust) => {
+  if (trust.verdict === "block") return new Response(null, { status: 403 });
+  return Response.json(await createAccount(await req.json()));
+});
+```
+
+Same guarantees as Express: it fails open, and it never rejects on your behalf.
+
+**Use it in route handlers, not `middleware.ts`.** Next.js middleware runs on
+every matched request before routing, so scoring there adds LayerCall's latency
+to page loads that have nothing to do with signups — and bills a lookup for
+each one. Score where the account is actually created.
