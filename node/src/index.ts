@@ -12,6 +12,20 @@ export type Verdict = "allow" | "review" | "block";
 /** 0 lenient · 1 balanced (default) · 2 strict · 3 paranoid. */
 export type Strictness = 0 | 1 | 2 | 3;
 
+// Response types, generated from LIVE responses rather than written by hand.
+//
+// The hand-written versions had drifted badly and nothing caught it, because a
+// wrong type is not a runtime error — it is a compile-time lie. EmailResult
+// omitted eleven fields the API returns, including normalized_email,
+// deliverability_score, mx_provider and digital_footprint, so a TypeScript
+// user could not reach most of the email product without a cast. Three types
+// also declared request_id, which those endpoints do not return, promising a
+// string that arrives undefined.
+//
+// test/api-contract.test.mjs now compares these against the live API in both
+// directions on every CI run. Add a field to a response and it fails until the
+// type follows.
+
 export type IpResult = {
   ip: string;
   risk_score: number;
@@ -29,29 +43,59 @@ export type IpResult = {
   first_seen: string | null;
   times_seen: number;
   abuse_reports: number;
+  /** True when served from cache. Cached lookups are never billed. */
+  cached: boolean;
   request_id: string;
   processing_time_sec: number;
 };
 
 export type EmailResult = {
   email: string;
+  /** Provider-normalised form (dots and +tags resolved where applicable). */
+  normalized_email: string;
   risk_score: number;
   verdict: Verdict;
   status: string;
   sub_status: string | null;
+  /** 0-100. Higher means more likely to accept mail. */
+  deliverability_score: number;
+  did_you_mean: string | null;
   signals: {
     syntax_valid: boolean;
     mx_found: boolean;
     is_disposable: boolean;
+    is_homograph: boolean;
     is_role_account: boolean;
     is_free_provider: boolean;
+    is_suspicious_handle: boolean;
+    is_tagged: boolean;
+    is_risky_tld: boolean;
+    has_digital_footprint: boolean;
+    /** null = could not be determined, NOT "no". */
+    is_catch_all: boolean | null;
     /** null = the domain's age could not be determined, NOT "it is old". */
     is_new_domain: boolean | null;
     /** null = the provider does not answer honestly; never a guess. */
     mailbox_exists: boolean | null;
   };
-  did_you_mean: string | null;
-  request_id: string;
+  domain: string;
+  /** null when the TLD publishes no RDAP record. */
+  domain_age_days: number | null;
+  mx_provider: string | null;
+  mx_records: string[];
+  first_seen: string | null;
+  times_seen: number;
+  abuse_reports: number;
+  digital_footprint: {
+    has_gravatar: boolean;
+    gravatar_profile_url: string | null;
+    /** null unless a breach source is configured. */
+    breach_count: number | null;
+    seen_in_breach: boolean | null;
+  };
+  /** Score before reputation and footprint adjustments. */
+  base_risk: number;
+  processing_time_sec: number;
 };
 
 export type PhoneResult = {
@@ -59,9 +103,22 @@ export type PhoneResult = {
   risk_score: number;
   verdict: Verdict;
   parse_status: string;
-  signals: { syntax_valid: boolean; is_voip: boolean; is_premium_rate: boolean; is_toll_free: boolean };
-  number: { e164: string | null; country: string | null; line_type: string | null };
-  request_id: string;
+  signals: {
+    syntax_valid: boolean;
+    is_possible: boolean;
+    is_voip: boolean;
+    is_premium_rate: boolean;
+    is_toll_free: boolean;
+    assigned_area_code: boolean;
+  };
+  number: {
+    e164: string | null;
+    country: string | null;
+    national: string | null;
+    international: string | null;
+    line_type: string | null;
+  };
+  processing_time_sec: number;
 };
 
 export type DomainResult = {
@@ -71,12 +128,17 @@ export type DomainResult = {
   signals: {
     resolves: boolean;
     mx_found: boolean;
+    has_spf: boolean;
+    has_dmarc: boolean;
     is_disposable: boolean;
+    is_homograph: boolean;
+    is_free_provider: boolean;
     is_risky_tld: boolean;
     /** null = registration date unavailable (no RDAP for that TLD). */
     newly_registered: boolean | null;
   };
   registration: { created_at: string | null; age_days: number | null; registrar: string | null };
+  processing_time_sec: number;
 };
 
 export type UserResult = {
@@ -86,6 +148,7 @@ export type UserResult = {
   components_checked: string[];
   components: Record<string, unknown>;
   request_id: string;
+  processing_time_sec: number;
 };
 
 export type BatchResult<T> = {
