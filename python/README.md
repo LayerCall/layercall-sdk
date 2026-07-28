@@ -1,5 +1,9 @@
 # layercall
 
+> **Not yet on npm / PyPI.** Publishing is waiting on our payment provider
+> approving the store — days, not weeks. The source here is complete and
+> current; clone it if you want to try the client before then.
+
 Official Python client for [LayerCall](https://www.layercall.com) — score an
 IP, email, phone number, domain, or a whole signup for fraud in a single call.
 
