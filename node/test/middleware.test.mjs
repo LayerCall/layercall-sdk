@@ -115,9 +115,21 @@ await check("GET requests are not scored (quota protection)", async () => {
 });
 
 await check("onBlock is never invoked on an allow verdict", async () => {
+  // Documented test-mode fixtures, not real-world values.
+  //
+  // This used to send 8.8.8.8 and a gmail address and rely on the live data
+  // happening to score them "allow". Under a test key those are synthetic, and
+  // that pair derives to 87/block — so the test failed for a reason that had
+  // nothing to do with onBlock. 192.0.2.1 and clean@example.com are documented
+  // to return allow/0 forever, which is what an assertion about the callback
+  // actually needs.
   let called = false;
   const mw = layercall({ apiKey: KEY, onBlock: () => { called = true; } });
-  await run(mw, mkReq({ body: { email: "hello@gmail.com" }, headers: { "x-forwarded-for": "8.8.8.8" } }));
+  const { req } = await run(mw, mkReq({
+    body: { email: "clean@example.com" },
+    headers: { "x-forwarded-for": "192.0.2.1" },
+  }));
+  eq(req.trust.verdict, "allow", "verdict");
   eq(called, false, "onBlock called");
 });
 

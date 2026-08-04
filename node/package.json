@@ -1,6 +1,6 @@
 {
   "name": "layercall",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Official LayerCall client \u2014 score an IP, email, phone, domain or a whole signup for fraud in one call. Zero dependencies.",
   "keywords": [
     "fraud",
@@ -20,7 +20,7 @@
   "homepage": "https://www.layercall.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hirajha/layercall-sdk.git",
+    "url": "git+https://github.com/LayerCall/layercall-sdk.git",
     "directory": "node"
   },
   "bugs": {

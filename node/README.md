@@ -1,9 +1,5 @@
 # layercall
 
-> **Not yet on npm / PyPI.** Publishing is waiting on our payment provider
-> approving the store — days, not weeks. The source here is complete and
-> current; clone it if you want to try the client before then.
-
 Official Node client for [LayerCall](https://www.layercall.com) — score an IP,
 email, phone number, domain, or a whole signup for fraud in a single call.
 
@@ -63,7 +59,58 @@ await lc.lookupPhone("4155552671", { country: "US" });
 await lc.scoreDomain("example.com");
 await lc.scoreUser({ ip, email, phone, device_id });
 await lc.batch("email", ["a@x.com", "b@y.com"]);   // up to 500
+
+// AI agents — proof of identity, then your policy applied to it
+await lc.verifyAgent({ url, headers });            // who is this?
+await lc.authorizeAgent({ method, url, headers }); // may they do this, here?
+await lc.getAgentPolicy();
+await lc.setAgentPolicy([{ trigger: "crawler", path: "/api", action: "deny" }]);
+
+// Tell us whether a score was right. Free, and the only thing that improves it.
+await lc.reportOutcome({ request_id: r.request_id, outcome: "fraud" });
 ```
+
+### AI agents
+
+An AI agent does not evade fraud detection — it passes it. Real browser, real
+fingerprint, residential address, a real mailbox that receives the code. Every
+classical signal is a proxy for "is a human here", and an agent genuinely has
+what those proxies measure.
+
+So `scoreUser` returns an `actor` block that says what kind of thing this is,
+and the field to branch on is `proven`:
+
+```ts
+const r = await lc.scoreUser({ ip, email, device_id, agent: { method, url, headers } });
+
+r.actor.type    // "verified_agent" | "impersonated_agent" | "automation"
+                // | "likely_human" | "unknown"
+r.actor.proven  // true ONLY for a verified cryptographic signature
+r.agent?.decision  // "allow" | "deny" | "review" — your policy, if you passed `agent`
+```
+
+`proven` is true for exactly one thing: a Web Bot Auth signature that verified.
+That is arithmetic and has no false-positive rate. Headless detection and
+automation markers are inference, and inference a capable adversary patches in
+an afternoon. Branch on `proven` and you will never mistake one for the other.
+
+There is deliberately no `"human"` value. A capable agent driving a real browser
+passes every human check, so `likely_human` means *nothing here looks
+automated* — a statement about our evidence, not about your visitor.
+
+### Patterns across values
+
+`scoreUser` also returns `linkage`. Forty signups from forty clean addresses
+with forty plausible inboxes each score allow, correctly — each one really is
+unremarkable. What gives the operator away is one device seen with twelve
+emails, or fifty lookups from one /24 in an hour.
+
+```ts
+r.linkage.device_email_count  // distinct emails on this device
+r.linkage.subnet_rate_1h      // lookups from this /24 in the last hour
+```
+
+A `null` means we do not know. It never means zero.
 
 Every method takes `strictness` (`0` lenient → `3` paranoid). It moves the
 verdict thresholds only; the risk score itself never changes, so you can

@@ -20,6 +20,10 @@ const USAGE = `${C.bold}layercall${C.off} — trust and fraud signals from the t
   ${C.dim}npx layercall${C.off} phone   +14155552671 [--country US]
   ${C.dim}npx layercall${C.off} domain  example.com
   ${C.dim}npx layercall${C.off} user    --ip 1.2.3.4 --email a@b.com [--phone +1...]
+  ${C.dim}npx layercall${C.off} device  <fingerprint from /fp.js>
+  ${C.dim}npx layercall${C.off} report  ip 1.2.3.4 [--reason "carding"]
+  ${C.dim}npx layercall${C.off} agent   https://yoursite.com/signup --header "signature-agent: ..."
+  ${C.dim}npx layercall${C.off} outcome req_abc123 fraud
 
 Options
   --strictness 0..3   0 lenient, 1 balanced (default), 3 paranoid
@@ -37,11 +41,18 @@ if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
 
 const flags: Record<string, string> = {};
 const positional: string[] = [];
+// Collected separately: a signed request carries three or four headers, and the
+// generic parser above keeps only the last value for a repeated key.
+const headerFlags: Record<string, string> = {};
 for (let i = 0; i < argv.length; i++) {
   if (argv[i].startsWith("--")) {
     const key = argv[i].slice(2);
     const next = argv[i + 1];
-    if (next && !next.startsWith("--")) { flags[key] = next; i++; } else flags[key] = "true";
+    const val = next && !next.startsWith("--") ? (i++, next) : "true";
+    if (key === "header") {
+      const at = val.indexOf(":");
+      if (at > 0) headerFlags[val.slice(0, at).trim().toLowerCase()] = val.slice(at + 1).trim();
+    } else flags[key] = val;
   } else positional.push(argv[i]);
 }
 
@@ -71,6 +82,7 @@ const GOOD_WHEN_TRUE = new Set([
   "syntax_valid",
   "is_possible",
   "assigned_area_code",
+  "is_fictional",
 ]);
 
 function verdictColour(v: string) {
@@ -82,6 +94,21 @@ function render(r: Record<string, unknown>) {
     console.log(JSON.stringify(r, null, 2));
     return;
   }
+  // Say it before the score, not after.
+  //
+  // A test key renders a fabricated verdict exactly as convincingly as a real
+  // one — same colours, same layout, same confidence. Someone trying us for
+  // the first time with tl_test_ would read invented numbers as our accuracy
+  // and leave. The banner has to sit above the thing it is qualifying.
+  if (r.test_mode === true) {
+    console.log(
+      `\n  ${C.yellow}${C.bold}TEST MODE${C.off}${C.dim} — synthetic data. ` +
+        `Scores below are fabricated, not real intelligence.${C.off}\n` +
+        `  ${C.dim}Use a live key (tl_live_…) to score real values. ` +
+        `https://www.layercall.com/docs/test-mode${C.off}`,
+    );
+  }
+
   const verdict = String(r.verdict ?? "");
   console.log(
     `\n  ${C.bold}${r.risk_score}${C.off}${C.dim}/100${C.off}  ` +
@@ -129,6 +156,42 @@ try {
       if (!value) throw new Error("Usage: layercall domain <domain>");
       out = (await lc.scoreDomain(value)) as unknown as Record<string, unknown>;
       break;
+    case "device":
+      if (!value) throw new Error("Usage: layercall device <device_id from /fp.js>");
+      out = (await lc.scoreDevice({ device_id: value, ip: flags.ip })) as unknown as Record<string, unknown>;
+      break;
+    case "agent": {
+      // Should this agent be allowed to do this, here? Pass the request the
+      // agent made to YOU — the signature covers its method, URL and headers,
+      // so none of it can be inferred from this side.
+      if (!value) throw new Error('Usage: layercall agent <url> [--method POST] [--header "signature-agent: ..."]');
+      out = (await lc.authorizeAgent({
+        method: flags.method ?? "GET",
+        url: value,
+        headers: headerFlags,
+      })) as unknown as Record<string, unknown>;
+      break;
+    }
+    case "outcome": {
+      // Free, and the only thing that improves the engine. Quote the
+      // request_id from the score you are reporting on.
+      const outcome = positional[2];
+      if (!value || (outcome !== "fraud" && outcome !== "legitimate")) {
+        throw new Error("Usage: layercall outcome <request_id> <fraud|legitimate>");
+      }
+      out = (await lc.reportOutcome({ request_id: value, outcome })) as unknown as Record<string, unknown>;
+      break;
+    }
+    case "report": {
+      // `layercall report ip 1.2.3.4` — kind first, then the value, because
+      // the kind cannot be inferred reliably (a bare string could be a device
+      // id or a domain) and guessing wrong writes to the shared network.
+      const kind = value;
+      const target = positional[2];
+      if (!kind || !target) throw new Error("Usage: layercall report <ip|email|phone|domain|device> <value> [--reason ...]");
+      out = (await lc.report(kind as never, target, flags.reason)) as unknown as Record<string, unknown>;
+      break;
+    }
     case "user":
       out = (await lc.scoreUser({
         ip: flags.ip, email: flags.email, phone: flags.phone,

@@ -9,8 +9,108 @@
 
 export type Verdict = "allow" | "review" | "block";
 
+/**
+ * Present only on responses produced by a test key (`tl_test_`).
+ *
+ * Test keys return synthetic data — scores and signals are derived from the
+ * value you sent, not from anything we know about it. Shapes, error codes and
+ * your custom rules behave exactly as in production, so integration tests are
+ * valid; the numbers are not. Branch on `test_mode` if you need to assert that
+ * a suite is pointed at a test key rather than a live one.
+ *
+ * Absent on live responses, so `result.test_mode` is a safe truthiness check.
+ * See https://www.layercall.com/docs/test-mode
+ */
+export type TestModeMarkers = {
+  /** "test" on synthetic responses; absent on live ones. */
+  mode?: "test";
+  /** True on synthetic responses; absent on live ones. */
+  test_mode?: true;
+  /** Human-readable explanation of why the values are fabricated. */
+  test_mode_note?: string;
+};
+
 /** 0 lenient · 1 balanced (default) · 2 strict · 3 paranoid. */
 export type Strictness = 0 | 1 | 2 | 3;
+
+/**
+ * What kind of thing made this request.
+ *
+ * Branch on `proven` rather than on `type` when the difference between evidence
+ * and proof matters. It is true for exactly one thing — a Web Bot Auth
+ * signature that verified, which is arithmetic and has no false-positive rate.
+ * Everything else here is inference that a capable adversary can defeat.
+ *
+ * There is deliberately no "human" value: a capable AI agent driving a real
+ * browser passes every human check, so `likely_human` means "nothing here looks
+ * automated", which is a statement about our evidence and not about your
+ * visitor.
+ */
+export type ActorType =
+  | "verified_agent"
+  | "impersonated_agent"
+  | "automation"
+  | "likely_human"
+  | "unknown";
+
+export type Actor = {
+  type: ActorType;
+  /** True only for a verified cryptographic signature. */
+  proven: boolean;
+  basis: "signature" | "device_signals" | "none";
+  /** Named only when a signature named it — never guessed from a user agent. */
+  operator: string | null;
+  /** "fetcher" = a person asked for this. "crawler" = nobody did. */
+  trigger: string | null;
+  detail: string;
+};
+
+/**
+ * Patterns across values, which no single value can show.
+ *
+ * A null means we do not know, never zero. Reporting an unavailable count as 0
+ * would read as "this device has never been seen with any other address",
+ * which is the strongest exonerating claim this layer can make.
+ */
+export type Linkage = {
+  device_email_count: number | null;
+  email_device_count: number | null;
+  email_ip_count: number | null;
+  /** Scoped to the /24: rotating inside a subnet is the cheapest evasion there is. */
+  subnet_rate_1h: number | null;
+  domain_rate_1h: number | null;
+};
+
+export type AgentDecision = "allow" | "deny" | "review";
+
+/** A decision, not a score. Which rule decided is the actionable part. */
+export type AgentAuthorization = {
+  decision: AgentDecision;
+  /** "rule[N]" for your own policy, or the built-in default that applied. */
+  matched: string;
+  reason: string;
+  verified: boolean;
+  host: string | null;
+  trigger: string | null;
+  publishes_card: boolean;
+};
+
+/** One rule in your agent policy. Evaluated in order; first match wins. */
+export type AgentRule = {
+  /** Signature-Agent host, e.g. "chatgpt.com". Omit for any agent. */
+  agent?: string;
+  trigger?: "fetcher" | "crawler";
+  purpose?: string;
+  /** Literal path prefix, never a pattern. */
+  path?: string;
+  methods?: string[];
+  max_per_hour?: number;
+  action: AgentDecision;
+  reason?: string;
+};
+
+/** Whether a score turned out to be right. See LayerCall#reportOutcome. */
+export type Outcome = "fraud" | "legitimate";
 
 // Response types, generated from LIVE responses rather than written by hand.
 //
@@ -26,7 +126,7 @@ export type Strictness = 0 | 1 | 2 | 3;
 // directions on every CI run. Add a field to a response and it fails until the
 // type follows.
 
-export type IpResult = {
+export type IpResult = TestModeMarkers & {
   ip: string;
   risk_score: number;
   verdict: Verdict;
@@ -36,7 +136,17 @@ export type IpResult = {
     is_datacenter: boolean;
     is_tor: boolean;
     recent_abuse: boolean;
+    /**
+     * Inside a netblock Spamhaus DROP lists as hijacked or criminal-controlled.
+     * A separate dimension from VPN/datacenter/Tor: stolen space looks like
+     * nothing in particular, which is precisely why it gets stolen.
+     */
+    is_hijacked_netblock: boolean;
+    /** RFC1918 or reserved — usually a misconfiguration on your side. */
+    is_private_or_reserved?: boolean;
   };
+  /** Attribution for is_hijacked_netblock; null when it did not fire. */
+  hijacked_source?: string | null;
   geo: { country: string | null; city: string | null; asn: string | null; isp: string | null };
   /** Named only when the operator's own published list confirms it. */
   vpn_provider: string | null;
@@ -49,7 +159,7 @@ export type IpResult = {
   processing_time_sec: number;
 };
 
-export type EmailResult = {
+export type EmailResult = TestModeMarkers & {
   email: string;
   /** Provider-normalised form (dots and +tags resolved where applicable). */
   normalized_email: string;
@@ -75,8 +185,19 @@ export type EmailResult = {
     is_catch_all: boolean | null;
     /** null = the domain's age could not be determined, NOT "it is old". */
     is_new_domain: boolean | null;
+    /** Domain publishes an SPF record. */
+    has_spf: boolean;
+    /** Domain publishes a DMARC policy. */
+    has_dmarc: boolean;
     /** null = the provider does not answer honestly; never a guess. */
     mailbox_exists: boolean | null;
+    /**
+     * Which kind of "unknown" you have — a bare null cannot tell them apart.
+     * "catch_all" means the domain accepts mail for addresses that do not
+     * exist, so nobody can ever verify it. "pending" means the answer will be
+     * there next time.
+     */
+    mailbox_status: "verified" | "catch_all" | "pending" | "unsupported" | "unavailable";
   };
   domain: string;
   /** null when the TLD publishes no RDAP record. */
@@ -93,12 +214,17 @@ export type EmailResult = {
     breach_count: number | null;
     seen_in_breach: boolean | null;
   };
-  /** Score before reputation and footprint adjustments. */
-  base_risk: number;
+  // No base_risk here. It was declared as a required number, but the API only
+  // emitted it on a cache hit — an internal field that leaked through a spread
+  // of the cache entry. TypeScript users were promised a number that was
+  // undefined on any cold lookup. The leak is fixed in lib/email.ts; the field
+  // is internal and stays unexposed.
   processing_time_sec: number;
+  /** Quote this to reportOutcome() to tell us whether the score was right. */
+  request_id: string;
 };
 
-export type PhoneResult = {
+export type PhoneResult = TestModeMarkers & {
   phone: string;
   risk_score: number;
   verdict: Verdict;
@@ -110,6 +236,8 @@ export type PhoneResult = {
     is_premium_rate: boolean;
     is_toll_free: boolean;
     assigned_area_code: boolean;
+    /** Reserved for fiction (555-0100..0199) and never assignable. */
+    is_fictional: boolean | null;
   };
   number: {
     e164: string | null;
@@ -119,9 +247,11 @@ export type PhoneResult = {
     line_type: string | null;
   };
   processing_time_sec: number;
+  /** Quote this to reportOutcome() to tell us whether the score was right. */
+  request_id: string;
 };
 
-export type DomainResult = {
+export type DomainResult = TestModeMarkers & {
   domain: string;
   risk_score: number;
   verdict: Verdict;
@@ -139,16 +269,54 @@ export type DomainResult = {
   };
   registration: { created_at: string | null; age_days: number | null; registrar: string | null };
   processing_time_sec: number;
+  /** Quote this to reportOutcome() to tell us whether the score was right. */
+  request_id: string;
 };
 
-export type UserResult = {
+export type UserResult = TestModeMarkers & {
   risk_score: number;
   verdict: Verdict;
+  /** What kind of thing this is, as opposed to what to do about it. */
+  actor: Actor;
+  /** Cross-value patterns. Reported today; they do not yet move the score. */
+  linkage: Linkage;
+  /** Present only when you passed `agent`. A denied agent forces verdict=block. */
+  agent?: AgentAuthorization;
   top_signals: string[];
   components_checked: string[];
   components: Record<string, unknown>;
   request_id: string;
   processing_time_sec: number;
+};
+
+export type DeviceResult = TestModeMarkers & {
+  device_id: string;
+  risk_score: number;
+  verdict: Verdict;
+  bot_probability: number;
+  signals: {
+    is_bot: boolean;
+    is_automated: boolean;
+    is_headless: boolean;
+    timezone_mismatch: boolean;
+    repeat_device: boolean;
+  };
+  first_seen: string | null;
+  times_seen: number;
+  abuse_reports: number;
+};
+
+/** Web Bot Auth. `verified` is cryptographic proof, not an inference. */
+export type AgentResult = TestModeMarkers & {
+  verified: boolean;
+  /** e.g. "https://chatgpt.com". Present even when verification fails. */
+  agent: string | null;
+  keyid: string | null;
+  /** "ai", "search", … self-asserted by the agent's directory. */
+  purpose: string | null;
+  /** Why it failed. null when verified. */
+  reason: string | null;
+  expires_in: number | null;
 };
 
 export type BatchResult<T> = {
@@ -280,20 +448,157 @@ export class LayerCall {
     return this.request<DomainResult>("/v1/score/domain", { query: { domain } });
   }
 
-  /** Score a whole signup. A hard block on one component is never averaged away. */
+  /**
+   * Score a whole signup, in one call.
+   *
+   * Returns risk_score and verdict, plus `actor` (what kind of thing this is,
+   * with `proven` true only for a verified signature) and `linkage` (patterns
+   * across values that no single value can show). Pass `agent` to get an
+   * authorization decision in the same call; a denied agent forces the verdict
+   * to block, because that is your own policy.
+   *
+   * A block on any single component floors the combined score at review, so one
+   * definitive red flag is never averaged away by four clean ones. It stops at
+   * review rather than block on purpose: one certain component is not a certain
+   * signup. Raise strictness to 2 if you want that floor to land on block.
+   */
   scoreUser(input: {
     ip?: string;
     email?: string;
     phone?: string;
     phone_country?: string;
     domain?: string;
+    /** Fingerprint from /fp.js. */
     device_id?: string;
+    /** Browser characteristics from /fp.js — needed for bot scoring. */
+    device_signals?: Record<string, unknown>;
+    /** Automation markers from /fp.js. */
+    device_automation?: Record<string, unknown>;
+    /**
+     * The signed request an AI agent made to YOU, if one did.
+     *
+     * The Web Bot Auth signature covers the method, URL and headers the agent
+     * sent, so none of it can be inferred — pass them exactly as they arrived.
+     * Omit for an ordinary signup and nothing about the response changes.
+     */
+    agent?: { method?: string; url: string; headers: Record<string, string> };
     strictness?: Strictness;
   }) {
     return this.request<UserResult>("/v1/score/user", {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  /**
+   * Score a device fingerprint from /fp.js.
+   *
+   * POST, never GET: a device id in a URL lands in access logs and Referer
+   * headers, and that is a tracking identifier.
+   */
+  scoreDevice(input: {
+    device_id: string;
+    ip?: string;
+    signals?: Record<string, unknown>;
+    automation?: Record<string, unknown>;
+  }) {
+    return this.request<DeviceResult>("/v1/score/device", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /**
+   * Verify a Web Bot Auth signature — proof of WHICH agent is calling.
+   *
+   * Pass the request the agent made to YOU: the signature covers its method,
+   * authority and path, so none of it can be inferred from our side.
+   *
+   * The only check here that proves rather than infers, so there is no score
+   * and no verdict. What to do about a verified agent is your policy: an
+   * assistant acting for a real user is usually welcome, a scraper usually is
+   * not, and both may be correctly signed.
+   */
+  verifyAgent(input: { method?: string; url: string; headers: Record<string, string> }) {
+    return this.request<AgentResult>("/v1/verify/agent", {
+      method: "POST",
+      body: JSON.stringify({ method: input.method ?? "GET", ...input }),
+    });
+  }
+
+  /**
+   * Report a value as confirmed fraud, feeding the shared reputation network.
+   *
+   * Live keys only — a test key is refused, because test traffic must never
+   * teach the network something a suite invented.
+   */
+  /**
+   * Should this agent be allowed to do this, here?
+   *
+   * verifyAgent() answers "who is this" and stops. This applies your policy to
+   * the answer and returns a decision with the rule that made it. Use
+   * scoreUser({ agent }) instead when there is a signup identity to score
+   * alongside it — one call does both.
+   */
+  authorizeAgent(input: { method?: string; url: string; headers: Record<string, string> }) {
+    return this.request<AgentAuthorization & { agent: Record<string, unknown> }>(
+      "/v1/agent/authorize",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+
+  /** Read your agent policy. Free. */
+  getAgentPolicy() {
+    return this.request<{ rules: AgentRule[]; updated_at: string | null }>("/v1/agent/policy");
+  }
+
+  /**
+   * Replace your agent policy. Free.
+   *
+   * Rules are evaluated in order and the first match wins. An empty policy is
+   * not an open door: the defaults still deny an unverifiable signature and
+   * refuse a self-declared crawler attempting to change state.
+   */
+  setAgentPolicy(rules: AgentRule[]) {
+    return this.request<{ saved: number; rules: AgentRule[] }>("/v1/agent/policy", {
+      method: "PUT",
+      body: JSON.stringify({ rules }),
+    });
+  }
+
+  /**
+   * Tell us whether a score was right.
+   *
+   * Free, and the only way either of us finds out whether the thresholds suit
+   * your traffic. A "fraud" label also raises the abuse counters on every value
+   * in that score across the whole network, so your confirmed loss protects the
+   * next customer immediately.
+   *
+   * Pass the request_id from the score you are reporting on. Accepts one or an
+   * array of up to 500 — a day of chargebacks is a list, not 500 requests.
+   */
+  reportOutcome(
+    input: { request_id: string; outcome: Outcome } | Array<{ request_id: string; outcome: Outcome }>,
+  ) {
+    return this.request<{
+      recorded: number;
+      not_found: number;
+      results: Array<{
+        request_id: string;
+        status: "recorded" | "relabelled" | "not_found" | "invalid" | "unavailable";
+        our_score?: number;
+        our_verdict?: Verdict;
+        /** True when we said allow and you saw fraud, or we said block and it was fine. */
+        disagreement?: boolean;
+      }>;
+    }>("/v1/outcome", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  report(kind: "ip" | "email" | "phone" | "domain" | "device", value: string, reason?: string) {
+    return this.request<{ reported: number; results: Array<{ kind: string; abuse_reports: number }> }>(
+      "/v1/report",
+      { method: "POST", body: JSON.stringify({ kind, value, reason }) },
+    );
   }
 
   /** Up to 500 values of one type. Each item carries its own error. */
