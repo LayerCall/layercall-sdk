@@ -1,8 +1,9 @@
 # LayerCall SDKs
 
-> **Not yet on npm / PyPI.** Publishing is waiting on our payment provider
-> approving the store — days, not weeks. The source here is complete and
-> current; clone it if you want to try the client before then.
+[![npm](https://img.shields.io/npm/v/layercall?label=npm&color=cb3837)](https://www.npmjs.com/package/layercall)
+[![PyPI](https://img.shields.io/pypi/v/layercall?label=PyPI&color=3775a9)](https://pypi.org/project/layercall/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](#)
 
 Official clients for [LayerCall](https://www.layercall.com) — score an IP,
 email, phone number, domain, or a whole signup for fraud in a single call.
@@ -18,7 +19,7 @@ path, which is the worst place in an application to introduce a dependency
 tree.
 
 [Get a free API key](https://www.layercall.com/get-key) — 1,000 lookups a
-month, no card required.
+month, no card required, no daily cap.
 
 ## Try it without installing anything
 
@@ -76,21 +77,85 @@ the specific mistake these fields exist to prevent.
 | `/v1/score/domain` | RDAP age, registrar, MX/SPF/DMARC, risky TLD |
 | `/v1/score/device` | Device fingerprint reputation + bot probability |
 | `/v1/score/user` | All of the above weighted into one verdict |
+| `/v1/verify/agent` | Web Bot Auth (RFC 9421) — prove an AI agent is who it claims |
 | `/v1/batch` | Up to 500 values of one type |
 
 Full reference: [layercall.com/docs](https://www.layercall.com/docs) ·
 OpenAPI 3.1: [layercall.com/openapi.json](https://www.layercall.com/openapi.json)
 
-## MCP
+## Testing without spending anything
 
-LayerCall also speaks the Model Context Protocol, so Claude, Cursor, ChatGPT,
-VS Code, Windsurf and Zed can call it mid-conversation:
+Test-mode keys return deterministic **synthetic** data, drawn from ranges
+reserved for exactly this purpose — RFC 5737 addresses, `example.com`, the
+555-01XX fiction block. Same shape and fields as production, so your assertions
+are real ones. They never bill, never hit live data sources, and never write to
+the shared reputation network.
 
+Every fixture is documented, so you can assert on exact values rather than
+"did it return a number": [layercall.com/docs/test-mode](https://www.layercall.com/docs/test-mode)
+
+## MCP — call it from an AI agent
+
+LayerCall speaks the Model Context Protocol over Streamable HTTP, so Claude
+Code, Claude Desktop, ChatGPT, Cursor, VS Code, Windsurf and Zed can run a
+fraud check mid-conversation. There is nothing to install — it is a remote
+server, so you add a URL and your API key:
+
+```json
+{
+  "mcpServers": {
+    "layercall": {
+      "url": "https://www.layercall.com/api/mcp",
+      "headers": { "Authorization": "Bearer YOUR_API_KEY" }
+    }
+  }
+}
 ```
-https://www.layercall.com/api/mcp
+
+Seven tools are exposed: `score_ip`, `verify_email`, `lookup_phone`,
+`score_domain`, `score_device`, `verify_agent` and `score_user`.
+
+> VS Code names the top-level key `servers`, not `mcpServers`. That one
+> difference is the usual reason a copied config silently does nothing.
+
+Per-client setup: [layercall.com/docs/mcp](https://www.layercall.com/docs/mcp)
+
+## Framework middleware
+
+Drop-in for the two places this usually goes. The middleware attaches
+`req.trust` and leaves the decision to you:
+
+```ts
+import { layercall } from "layercall/express";
+
+app.post("/signup", layercall(), (req, res) => {
+  if (req.trust.verdict === "block") return res.status(403).json({ error: "..." });
+  if (req.trust.verdict === "review") flagForManualReview(req.trust);
+  createAccount(req.body);
+});
 ```
 
-Setup: [layercall.com/docs/mcp](https://www.layercall.com/docs/mcp)
+There is deliberately no `autoBlock: true`. A one-line install that starts
+rejecting people is the wrong default for a fraud tool — the failure is silent,
+it lands on real customers, and you find out from a support ticket.
+
+By default it only scores `POST`/`PUT`/`PATCH`, because a global `app.use()`
+bills a lookup for every request including `favicon.ico`.
+
+See [node/src/express.ts](node/src/express.ts) and
+[node/src/next.ts](node/src/next.ts) (`scoreRequest`, `withTrust`).
+
+## Guides
+
+Written for someone mid-incident rather than someone shopping. Each one ends
+with what a naive version gets wrong — including the parts that need no
+LayerCall at all.
+
+- [How to stop fake signups](https://www.layercall.com/guides/stop-fake-signups)
+- [How to block disposable email addresses at signup](https://www.layercall.com/guides/block-disposable-emails)
+- [How to detect VPN and proxy users at signup](https://www.layercall.com/guides/detect-vpn-at-signup)
+- [How to stop free trial abuse](https://www.layercall.com/guides/stop-free-trial-abuse)
+- [How to add fraud checks without losing real customers](https://www.layercall.com/guides/score-signup-without-blocking-real-users)
 
 ## License
 
