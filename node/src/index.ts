@@ -7,6 +7,20 @@
  * the host app already uses.
  */
 
+/**
+ * Kept in step with package.json by sdk-callable.test.mjs.
+ *
+ * Not read from package.json at runtime: this file is bundled by everything
+ * from webpack to esbuild to Bun, and a require("../package.json") is the one
+ * line guaranteed to break in some of them. A constant plus a test that fails
+ * the build on drift is the version of this that cannot silently rot — which
+ * the previous value, a hardcoded "1.0" that no release since 1.0.0 has been
+ * true of, demonstrates. Every Node call was reporting a version we shipped
+ * years of changes ago, so the one field that says which client a customer
+ * runs was useless for exactly the question it exists to answer.
+ */
+const VERSION = "1.2.5";
+
 export type Verdict = "allow" | "review" | "block";
 
 /**
@@ -189,6 +203,19 @@ export type EmailResult = TestModeMarkers & {
     has_spf: boolean;
     /** Domain publishes a DMARC policy. */
     has_dmarc: boolean;
+    /**
+     * Domain serves a website.
+     *
+     * A real business almost always has one; a domain registered purely to
+     * receive signup confirmations often does not. Weak on its own — plenty of
+     * legitimate domains are mail-only — which is why it is a signal you can
+     * read rather than something that moves the score by itself.
+     *
+     * Returned by the API and asserted in the scoring invariants since it
+     * shipped, but missing from this type until 1.2.3, so TypeScript callers
+     * had to cast to reach it.
+     */
+    has_website: boolean;
     /** null = the provider does not answer honestly; never a guess. */
     mailbox_exists: boolean | null;
     /**
@@ -276,6 +303,15 @@ export type DomainResult = TestModeMarkers & {
 export type UserResult = TestModeMarkers & {
   risk_score: number;
   verdict: Verdict;
+  /**
+   * One sentence describing the decision, e.g.
+   * "Blocked (100/100) — Tor exit node, disposable domain and machine-generated handle."
+   *
+   * The text for a Slack alert, a review ticket, or a log line. Built from the
+   * same top_signals as the rest of the response, so it can never disagree with
+   * them.
+   */
+  summary: string;
   /** What kind of thing this is, as opposed to what to do about it. */
   actor: Actor;
   /** Cross-value patterns. Reported today; they do not yet move the score. */
@@ -399,7 +435,7 @@ export class LayerCall {
           headers: {
             "X-Api-Key": this.key,
             "Content-Type": "application/json",
-            "User-Agent": "layercall-node/1.0",
+            "User-Agent": `layercall-node/${VERSION}`,
             ...(init?.headers ?? {}),
           },
           signal: AbortSignal.timeout(this.timeoutMs),
@@ -594,7 +630,11 @@ export class LayerCall {
     }>("/v1/outcome", { method: "POST", body: JSON.stringify(input) });
   }
 
-  report(kind: "ip" | "email" | "phone" | "domain" | "device", value: string, reason?: string) {
+  // "device" is deliberately absent: /v1/report accepts ip, email, domain and
+  // phone, and 400s on anything else. Offering it in autocomplete meant the
+  // type suggested a call that could only ever fail — the one thing a typed
+  // client exists to prevent.
+  report(kind: "ip" | "email" | "phone" | "domain", value: string, reason?: string) {
     return this.request<{ reported: number; results: Array<{ kind: string; abuse_reports: number }> }>(
       "/v1/report",
       { method: "POST", body: JSON.stringify({ kind, value, reason }) },

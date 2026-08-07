@@ -98,9 +98,47 @@ async function api(path) {
 // part of the response's shape.
 const IGNORE = new Set(["error"]);
 
+/** Field names declared inside a nested object literal on an exported type.
+ *
+ * `signals` is where the API actually says things — 17 booleans on
+ * EmailResult, ten on IpResult — and Object.keys() on the response never went
+ * near them. The top-level check only ever confirmed that a key called
+ * "signals" existed, not that its contents matched.
+ *
+ * That blind spot let has_website ship: returned by the API, printed in the
+ * documented sample, asserted in the scoring invariants, and absent from
+ * EmailResult for three releases while this test reported green. Removing the
+ * field again and re-running it was how the gap was found — the test still
+ * passed 7/7.
+ *
+ * Indentation-anchored (four spaces) because these sit one level in. Same
+ * empty-parse guard as declaredFields: a regex that quietly matches nothing
+ * would turn this check into a permanent pass, which is the failure it exists
+ * to prevent.
+ */
+function declaredNested(typeName, field) {
+  const m = SRC.match(new RegExp(`export type ${typeName} = ([^{]*)\\{(.*?)\\n\\};`, "s"));
+  if (!m) throw new Error(`could not find "export type ${typeName}"`);
+  const block = m[2].match(new RegExp(`^  ${field}:\\s*\\{(.*?)\\n  \\};`, "sm"));
+  if (!block) return null; // the type does not model this field as an object
+  const all = [...block[1].matchAll(/^ {4}(\w+)\??:/gm)].map((x) => x[1]);
+  if (all.length < 3) {
+    throw new Error(`${typeName}.${field}: parsed only ${all.length} fields — the regex has drifted`);
+  }
+  // Optionality has to be read here too, exactly as optionalFields() does at the
+  // top level. is_private_or_reserved is returned only for private and reserved
+  // ranges — 192.168/16, 10/8, 127/8 — and is correctly declared `?:` in both
+  // the SDK and lib/scoring.ts. Probing this check with a public IP and then
+  // flattening optionality away reported that correct declaration as drift, so
+  // the first version of this failed on a field that was never wrong.
+  const optional = new Set([...block[1].matchAll(/^ {4}(\w+)\?:/gm)].map((x) => x[1]));
+  return { all: new Set(all), optional };
+}
+
 async function compare(typeName, path) {
   const declared = new Set(declaredFields(typeName));
-  const actual = new Set(Object.keys(await api(path)).filter((k) => !IGNORE.has(k)));
+  const body = await api(path);
+  const actual = new Set(Object.keys(body).filter((k) => !IGNORE.has(k)));
 
   const optional = optionalFields(typeName);
   const missingFromSdk = [...actual].filter((k) => !declared.has(k));
@@ -113,6 +151,28 @@ async function compare(typeName, path) {
   if (notInApi.length) {
     problems.push(`${typeName} declares ${notInApi.map((f) => `"${f}"`).join(", ")} but the API does not return it — the type promises undefined`);
   }
+
+  // One level down, into signals — where the response actually says something.
+  const sig = body.signals;
+  if (sig && typeof sig === "object" && !Array.isArray(sig)) {
+    const declaredSig = declaredNested(typeName, "signals");
+    if (declaredSig) {
+      const actualSig = new Set(Object.keys(sig));
+      const sigMissing = [...actualSig].filter((k) => !declaredSig.all.has(k));
+      // A `?:` signal is allowed to be absent — that is what it means. Only a
+      // signal declared as always-present and then missing is a broken promise.
+      const sigExtra = [...declaredSig.all].filter(
+        (k) => !actualSig.has(k) && !declaredSig.optional.has(k),
+      );
+      if (sigMissing.length) {
+        problems.push(`API returns signals.${sigMissing.join(", signals.")} but ${typeName}.signals does not declare it — TypeScript users cannot reach it`);
+      }
+      if (sigExtra.length) {
+        problems.push(`${typeName}.signals declares ${sigExtra.join(", ")} but the API does not return it — the type promises undefined`);
+      }
+    }
+  }
+
   if (problems.length) throw new Error(problems.join("\n      "));
 }
 

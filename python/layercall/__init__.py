@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Literal, Mapping, Sequence
 
-__version__ = "1.0.0"
+__version__ = "1.2.5"
 __all__ = ["LayerCall", "LayerCallError"]
 
 Verdict = Literal["allow", "review", "block"]
@@ -105,7 +105,23 @@ class LayerCall:
         *,
         query: Mapping[str, Any] | None = None,
         body: Mapping[str, Any] | None = None,
+        method: str | None = None,
     ) -> dict[str, Any]:
+        """Send one request.
+
+        `method` exists because six public methods already passed it and this
+        signature did not accept it: score_device, verify_agent,
+        authorize_agent, set_agent_policy, report_outcome and report every one
+        raised TypeError before opening a socket. That is nearly half the
+        surface of a package published to PyPI, including the copy-paste
+        example in the agent docs.
+
+        It survived because the SDK's own smoke test exercised the working
+        seven, and the one method the docs headline with — score_user — is in
+        that set. Inferring the verb from body-presence was also not enough on
+        its own: set_agent_policy needs PUT, which no amount of body inspection
+        can produce.
+        """
         url = self._base + path
         if query:
             clean = {k: v for k, v in query.items() if v is not None}
@@ -119,7 +135,7 @@ class LayerCall:
             req = urllib.request.Request(
                 url,
                 data=data,
-                method="POST" if data is not None else "GET",
+                method=method or ("POST" if data is not None else "GET"),
                 headers={
                     "X-Api-Key": self._key,
                     "Content-Type": "application/json",
@@ -316,9 +332,11 @@ class LayerCall:
     ) -> dict[str, Any]:
         """Score a whole signup, in one call.
 
-        Returns risk_score and verdict, plus `actor` (what kind of thing this
-        is, with `proven` true only for a verified signature) and `linkage`
-        (patterns across values that no single value can show).
+        Returns `summary` — one sentence describing the decision, for a Slack
+        alert or a review ticket — plus risk_score and verdict, `actor` (what
+        kind of thing this is, with `proven` true only for a verified
+        signature) and `linkage` (patterns across values that no single value
+        can show).
 
         Pass `agent={"method", "url", "headers"}` — the signed request an AI
         agent made to YOU — to get an authorization decision in the same call.
