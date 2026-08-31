@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "layercall"
-version = "1.2.7"
+version = "1.2.8"
 description = "Official LayerCall client — score an IP, email, phone, domain or a whole signup for fraud in one call. Zero dependencies."
 readme = "README.md"
 requires-python = ">=3.9"

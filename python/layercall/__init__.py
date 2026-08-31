@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Literal, Mapping, Sequence
 
-__version__ = "1.2.7"
+__version__ = "1.2.8"
 __all__ = ["LayerCall", "LayerCallError"]
 
 Verdict = Literal["allow", "review", "block"]

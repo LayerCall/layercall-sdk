@@ -19,7 +19,7 @@
  * years of changes ago, so the one field that says which client a customer
  * runs was useless for exactly the question it exists to answer.
  */
-const VERSION = "1.2.7";
+const VERSION = "1.2.8";
 
 export type Verdict = "allow" | "review" | "block";
 
@@ -254,7 +254,23 @@ export type EmailResult = TestModeMarkers & {
      * exist, so nobody can ever verify it. "pending" means the answer will be
      * there next time.
      */
-    mailbox_status: "verified" | "catch_all" | "pending" | "unsupported" | "unavailable";
+    /**
+     * Which kind of "unknown" you have, because a bare null cannot tell them
+     * apart and they call for opposite reactions.
+     *
+     * `unknown` is the newest and was the API's for a long time before it was
+     * ever declared: it is returned when the request's own time budget runs out
+     * before the mailbox stage, and a cast in the server let it past a union
+     * that listed only the other five. If you switch exhaustively on this, that
+     * is the case you were never told about.
+     */
+    mailbox_status:
+      | "verified"
+      | "catch_all"
+      | "pending"
+      | "unsupported"
+      | "unavailable"
+      | "unknown";
   };
   domain: string;
   /** null when the TLD publishes no RDAP record. */
