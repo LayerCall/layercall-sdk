@@ -57,6 +57,7 @@ await lc.verifyEmail("someone@mailinator.com");
 await lc.lookupPhone("+14155552671");
 await lc.lookupPhone("4155552671", { country: "US" });
 await lc.scoreDomain("example.com");
+await lc.scoreDevice({ device_id, ip, signals });   // fingerprint from /fp.js
 await lc.scoreUser({ ip, email, phone, device_id });
 await lc.batch("email", ["a@x.com", "b@y.com"]);   // up to 500
 
@@ -68,6 +69,41 @@ await lc.setAgentPolicy([{ trigger: "crawler", path: "/api", action: "deny" }]);
 
 // Tell us whether a score was right. Free, and the only thing that improves it.
 await lc.reportOutcome({ request_id: r.request_id, outcome: "fraud" });
+
+// Report confirmed fraud to the shared reputation network. Live keys only.
+await lc.report("ip", "185.220.101.1", "carding");
+```
+
+### Custom rules — your lists always win
+
+A rule overrides the computed score for that value. The kind (`ip`, `cidr`,
+`email`, `domain`, `phone`, `asn`) is detected from the value unless you force
+it.
+
+```ts
+await lc.addRules("block", ["185.220.101.1", "mailinator.com"]);
+await lc.addRules("allow", "10.0.0.0/8");
+await lc.addRules("block", ["AS14061"], { kind: "asn" });
+
+const { count, rules } = await lc.listRules();
+await lc.deleteRule(rules[0].id);
+
+// Paste a list — one value per line, or CSV.
+await lc.importRules("block", "1.2.3.4\n5.6.7.8\nspam.example");
+
+// Removes EVERY rule on the account. `confirm` is required, deliberately.
+await lc.clearRules({ confirm: true });
+```
+
+### A pending mailbox
+
+`verifyEmail` returns `mailbox_status: "pending"` when the SMTP probe has not
+finished — it is queued and the answer is there on the next lookup. If you
+would rather wait for it, say so. It costs 2–10 seconds on a cache miss, which
+is why it is opt-in:
+
+```ts
+const r = await lc.verifyEmail("someone@example.com", { waitForMailbox: true });
 ```
 
 ### AI agents
@@ -112,9 +148,14 @@ r.linkage.subnet_rate_1h      // lookups from this /24 in the last hour
 
 A `null` means we do not know. It never means zero.
 
-Every method takes `strictness` (`0` lenient → `3` paranoid). It moves the
-verdict thresholds only; the risk score itself never changes, so you can
-re-tune without re-scoring anything.
+Every **scoring** method takes `strictness` (`0` lenient → `3` paranoid) —
+`scoreIp`, `verifyEmail`, `lookupPhone`, `scoreDomain`, `scoreDevice`,
+`scoreUser` and `batch`. It moves the verdict thresholds only; the risk score
+itself never changes, so you can re-tune without re-scoring anything.
+
+The other methods report or configure rather than score, and take no
+strictness: `report`, `reportOutcome`, `verifyAgent`, `authorizeAgent`,
+`getAgentPolicy`, `setAgentPolicy`.
 
 ## Nulls mean unknown, never "no"
 

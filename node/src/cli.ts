@@ -109,6 +109,42 @@ function render(r: Record<string, unknown>) {
     );
   }
 
+  /**
+   * Agent authorization has no score, on purpose — and this printed one anyway.
+   *
+   * `layercall agent …` returns decision / matched / reason, because "may this
+   * agent do this" is a policy question and not a risk measurement; the docs
+   * say so. render() reached for risk_score and verdict regardless, so the
+   * documented command for the newest part of the product printed
+   * "  undefined/100  " and a blank verdict. --json was correct the whole time,
+   * so only the view a first-time evaluator sees was broken.
+   */
+  if (r.decision !== undefined && r.risk_score === undefined) {
+    const decision = String(r.decision);
+    console.log(
+      `\n  ${verdictColour(decision === "deny" ? "block" : decision === "review" ? "review" : "allow")}` +
+        `${C.bold}${decision.toUpperCase()}${C.off}` +
+        (r.matched ? `${C.dim}  matched ${String(r.matched)}${C.off}` : "") +
+        `\n`,
+    );
+    if (r.reason) console.log(`  ${C.dim}${String(r.reason)}${C.off}`);
+    // Whether the signature actually verified is the other half of the answer:
+    // a decision on an unverified agent is a decision about a claim. It lives
+    // under `agent`, not at the top level — reading it from the root printed
+    // nothing at all, which is how the first version of this shipped.
+    const agent = (r.agent ?? {}) as Record<string, unknown>;
+    if (agent.verified !== undefined) {
+      const who = agent.name ? ` (${String(agent.name)})` : agent.host ? ` (${String(agent.host)})` : "";
+      console.log(
+        agent.verified === true
+          ? `  ${C.green}\u2713${C.off} signature verified${who}`
+          : `  ${C.yellow}\u00b7${C.off} signature not verified — the agent is unproven`,
+      );
+    }
+    console.log("");
+    return;
+  }
+
   const verdict = String(r.verdict ?? "");
   console.log(
     `\n  ${C.bold}${r.risk_score}${C.off}${C.dim}/100${C.off}  ` +

@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Literal, Mapping, Sequence
 
-__version__ = "1.2.5"
+__version__ = "1.2.7"
 __all__ = ["LayerCall", "LayerCallError"]
 
 Verdict = Literal["allow", "review", "block"]
@@ -87,7 +87,7 @@ class LayerCall:
         api_key: str,
         *,
         base_url: str = _DEFAULT_BASE,
-        timeout: float = 5.0,
+        timeout: float = 30.0,
         retries: int = 2,
     ) -> None:
         if not api_key:
@@ -95,6 +95,9 @@ class LayerCall:
         self._key = api_key
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        # /v1/batch alone budgets 300s server-side, so the normal default would
+        # abandon a large batch mid-flight and bill every item in it.
+        self._batch_timeout = max(timeout, 300.0)
         self._retries = retries
 
     # -- transport --------------------------------------------------------
@@ -143,7 +146,10 @@ class LayerCall:
                 },
             )
             try:
-                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                timeout = (
+                    self._batch_timeout if path == "/v1/batch" else self._timeout
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
                     return json.loads(resp.read().decode() or "{}")
             except urllib.error.HTTPError as exc:
                 try:
@@ -162,6 +168,22 @@ class LayerCall:
                     raise err from None
                 last_exc = err
             except Exception as exc:  # timeouts, DNS, connection resets
+                # A TIMEOUT IS NOT EVIDENCE THAT THE SERVER FAILED.
+                #
+                # It only says we stopped waiting. The request very likely
+                # arrived and is still being processed - and it will finish,
+                # meter a billable lookup, and return to nobody. Retrying does
+                # not recover that lookup, it buys a second one. With the old
+                # 5s default against a 25-second endpoint budget, one logical
+                # call became three billable ones and the caller still got an
+                # error.
+                #
+                # Refused, reset or DNS means the request never reached us, so
+                # a retry is free and worth making. Those still retry.
+                if isinstance(exc, TimeoutError) or isinstance(
+                    getattr(exc, "reason", None), TimeoutError
+                ):
+                    raise
                 last_exc = exc
                 if attempt == self._retries:
                     break
@@ -176,9 +198,30 @@ class LayerCall:
         """VPN, proxy, Tor, datacenter, geolocation and ASN for an IP."""
         return self._request("/v1/score/ip", query={"ip": ip, "strictness": strictness})
 
-    def verify_email(self, email: str, *, strictness: Strictness | None = None) -> dict[str, Any]:
-        """Syntax, MX, disposable, role account, homograph and domain age."""
-        return self._request("/v1/verify/email", query={"email": email, "strictness": strictness})
+    def verify_email(
+        self,
+        email: str,
+        *,
+        strictness: Strictness | None = None,
+        wait_for_mailbox: bool = False,
+    ) -> dict[str, Any]:
+        """Syntax, MX, disposable, role account, homograph and domain age.
+
+        wait_for_mailbox blocks until the SMTP mailbox probe finishes rather
+        than returning mailbox_status "pending". It is the documented remedy
+        for a pending mailbox, and it was reachable only by hand-writing the
+        HTTP call - the docs told you to pass it and the recommended client had
+        no way to. Costs 2-10 seconds on a cache miss, which is why it is
+        opt-in.
+        """
+        return self._request(
+            "/v1/verify/email",
+            query={
+                "email": email,
+                "strictness": strictness,
+                "wait_for_mailbox": "true" if wait_for_mailbox else None,
+            },
+        )
 
     def lookup_phone(
         self,
@@ -193,9 +236,12 @@ class LayerCall:
             query={"phone": phone, "country": country, "strictness": strictness},
         )
 
-    def score_domain(self, domain: str) -> dict[str, Any]:
+    def score_domain(self, domain: str, *, strictness: Strictness | None = None) -> dict[str, Any]:
         """RDAP registration date, registrar, MX/SPF/DMARC, risky TLD."""
-        return self._request("/v1/score/domain", query={"domain": domain})
+        return self._request(
+            "/v1/score/domain",
+            query={"domain": domain, "strictness": strictness},
+        )
 
     def score_device(
         self,
@@ -204,11 +250,15 @@ class LayerCall:
         ip: str | None = None,
         signals: dict[str, Any] | None = None,
         automation: dict[str, Any] | None = None,
+        strictness: Strictness | None = None,
     ) -> dict[str, Any]:
         """Score a device fingerprint from /fp.js.
 
         POST, never GET: a device id in a URL lands in access logs and Referer
         headers, and that is a tracking identifier.
+
+        ``strictness`` rides in the query string, not the body — the route
+        reads it from the URL for every endpoint, POST ones included.
         """
         body: dict[str, Any] = {"device_id": device_id}
         if ip is not None:
@@ -217,7 +267,12 @@ class LayerCall:
             body["signals"] = signals
         if automation is not None:
             body["automation"] = automation
-        return self._request("/v1/score/device", method="POST", body=body)
+        return self._request(
+            "/v1/score/device",
+            method="POST",
+            body=body,
+            query={"strictness": strictness},
+        )
 
     def verify_agent(
         self,
@@ -371,6 +426,66 @@ class LayerCall:
         if not payload:
             raise ValueError("score_user: provide at least one of ip, email or phone.")
         return self._request("/v1/score/user", body=payload)
+
+    # -- custom rules -----------------------------------------------------
+    #
+    # One of the nine products on the homepage, three endpoints, and until now
+    # no method in either SDK for any of them. A customer following our own
+    # advice to use the SDK found a promoted feature reachable only by
+    # hand-writing HTTP, and would reasonably conclude it was unfinished.
+    #
+    # A rule's kind (ip, cidr, email, domain, phone, asn) is detected from the
+    # value unless you force it.
+
+    def list_rules(self) -> dict[str, Any]:
+        """Every rule on the account."""
+        return self._request("/v1/rules")
+
+    def add_rules(
+        self,
+        action: str,
+        values: str | list[str],
+        *,
+        kind: str | None = None,
+    ) -> dict[str, Any]:
+        """Add one rule or many. Re-adding an existing rule is idempotent."""
+        body: dict[str, Any] = {
+            "action": action,
+            "values": [values] if isinstance(values, str) else list(values),
+        }
+        if kind is not None:
+            body["kind"] = kind
+        return self._request("/v1/rules", body=body)
+
+    def delete_rule(self, rule_id: str) -> dict[str, Any]:
+        """Remove one rule by id."""
+        return self._request(f"/v1/rules/{urllib.parse.quote(rule_id, safe='')}", method="DELETE")
+
+    def clear_rules(self, *, confirm: bool = False) -> dict[str, Any]:
+        """Remove EVERY rule on the account.
+
+        confirm=True is required by the API and deliberately not defaulted
+        here - the whole point of the flag is that it cannot happen by
+        accident, and an SDK that fills it in for you removes the guard.
+        """
+        if not confirm:
+            raise ValueError(
+                "clear_rules deletes every rule on the account - pass confirm=True."
+            )
+        return self._request("/v1/rules", method="DELETE", query={"confirm": "true"})
+
+    def import_rules(
+        self,
+        action: str,
+        text: str,
+        *,
+        kind: str | None = None,
+    ) -> dict[str, Any]:
+        """Import rules from pasted text - one value per line, or CSV."""
+        body: dict[str, Any] = {"action": action, "text": text}
+        if kind is not None:
+            body["kind"] = kind
+        return self._request("/v1/rules/import", body=body)
 
     def batch(
         self,

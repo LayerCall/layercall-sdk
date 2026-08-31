@@ -1,6 +1,6 @@
 {
   "name": "layercall",
-  "version": "1.2.5",
+  "version": "1.2.7",
   "description": "Official LayerCall client — score an IP, email, phone, domain or a whole signup for fraud in one call. Zero dependencies.",
   "keywords": [
     "fraud",

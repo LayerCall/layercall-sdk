@@ -19,7 +19,7 @@
  * years of changes ago, so the one field that says which client a customer
  * runs was useless for exactly the question it exists to answer.
  */
-const VERSION = "1.2.5";
+const VERSION = "1.2.7";
 
 export type Verdict = "allow" | "review" | "block";
 
@@ -141,6 +141,16 @@ export type Outcome = "fraud" | "legitimate";
 // type follows.
 
 export type IpResult = TestModeMarkers & {
+  /**
+   * Signals that could NOT be measured on this request, omitted entirely when
+   * everything answered.
+   *
+   * A fraud answer that says "clean" and one that says "we could not look"
+   * used to be the same bytes on the wire. Branch on this when a false
+   * negative matters: `if (res.signals_unavailable) …` — the key is absent on
+   * the happy path, so it never changes the shape you already parse.
+   */
+  signals_unavailable?: string[];
   ip: string;
   risk_score: number;
   verdict: Verdict;
@@ -174,6 +184,26 @@ export type IpResult = TestModeMarkers & {
 };
 
 export type EmailResult = TestModeMarkers & {
+  /**
+   * Signals that could NOT be measured on this request, omitted entirely when
+   * everything answered.
+   *
+   * A fraud answer that says "clean" and one that says "we could not look"
+   * used to be the same bytes on the wire. Branch on this when a false
+   * negative matters: `if (res.signals_unavailable) …` — the key is absent on
+   * the happy path, so it never changes the shape you already parse.
+   */
+  signals_unavailable?: string[];
+  /**
+   * Served from cache, and therefore not billed.
+   *
+   * The API gained this on email, phone and domain when a billing bug was
+   * fixed: only the IP scorer had ever set it, so cached lookups on the other
+   * three were charged despite the docs promising they were free. The SDK types
+   * did not follow, so TypeScript users could not reach a field the API was
+   * already returning — and the contract test caught it.
+   */
+  cached: boolean;
   email: string;
   /** Provider-normalised form (dots and +tags resolved where applicable). */
   normalized_email: string;
@@ -252,10 +282,43 @@ export type EmailResult = TestModeMarkers & {
 };
 
 export type PhoneResult = TestModeMarkers & {
+  /**
+   * Reputation-network history, as IpResult and EmailResult have carried all
+   * along. Added to phone and domain on 2026-08-19, when both joined the
+   * network: until then a customer could label either through reportOutcome()
+   * and it credited nothing.
+   *
+   * abuse_reports is the one to branch on — it counts confirmed fraud reports
+   * from across the network, not lookups. times_seen feeds the score for a
+   * phone (one number, so repetition is signal) and deliberately does NOT for a
+   * domain (one domain is a category, so repetition is popularity).
+   */
+  first_seen: string | null;
+  times_seen: number;
+  abuse_reports: number;
+  /**
+   * Served from cache, and therefore not billed.
+   *
+   * The API gained this on email, phone and domain when a billing bug was
+   * fixed: only the IP scorer had ever set it, so cached lookups on the other
+   * three were charged despite the docs promising they were free. The SDK types
+   * did not follow, so TypeScript users could not reach a field the API was
+   * already returning — and the contract test caught it.
+   */
+  cached: boolean;
   phone: string;
   risk_score: number;
   verdict: Verdict;
-  parse_status: string;
+  /**
+   * Why the number did not parse, and in one case how to fix it.
+   *
+   * This was typed `string`, so a TypeScript developer got no autocomplete and
+   * no clue the four values existed — the types were generated from live
+   * responses, which only ever showed "ok", so the generator flattened the
+   * enum away. `country_required` is the single most actionable thing the
+   * phone product says: resend with a country and it will work.
+   */
+  parse_status: "ok" | "country_required" | "impossible" | "invalid_pattern";
   signals: {
     syntax_valid: boolean;
     is_possible: boolean;
@@ -279,6 +342,40 @@ export type PhoneResult = TestModeMarkers & {
 };
 
 export type DomainResult = TestModeMarkers & {
+  /**
+   * Reputation-network history, as IpResult and EmailResult have carried all
+   * along. Added to phone and domain on 2026-08-19, when both joined the
+   * network: until then a customer could label either through reportOutcome()
+   * and it credited nothing.
+   *
+   * abuse_reports is the one to branch on — it counts confirmed fraud reports
+   * from across the network, not lookups. times_seen feeds the score for a
+   * phone (one number, so repetition is signal) and deliberately does NOT for a
+   * domain (one domain is a category, so repetition is popularity).
+   */
+  first_seen: string | null;
+  times_seen: number;
+  abuse_reports: number;
+  /**
+   * Signals that could NOT be measured on this request, omitted entirely when
+   * everything answered.
+   *
+   * A fraud answer that says "clean" and one that says "we could not look"
+   * used to be the same bytes on the wire. Branch on this when a false
+   * negative matters: `if (res.signals_unavailable) …` — the key is absent on
+   * the happy path, so it never changes the shape you already parse.
+   */
+  signals_unavailable?: string[];
+  /**
+   * Served from cache, and therefore not billed.
+   *
+   * The API gained this on email, phone and domain when a billing bug was
+   * fixed: only the IP scorer had ever set it, so cached lookups on the other
+   * three were charged despite the docs promising they were free. The SDK types
+   * did not follow, so TypeScript users could not reach a field the API was
+   * already returning — and the contract test caught it.
+   */
+  cached: boolean;
   domain: string;
   risk_score: number;
   verdict: Verdict;
@@ -301,6 +398,16 @@ export type DomainResult = TestModeMarkers & {
 };
 
 export type UserResult = TestModeMarkers & {
+  /**
+   * Signals that could NOT be measured on this request, omitted entirely when
+   * everything answered.
+   *
+   * A fraud answer that says "clean" and one that says "we could not look"
+   * used to be the same bytes on the wire. Branch on this when a false
+   * negative matters: `if (res.signals_unavailable) …` — the key is absent on
+   * the happy path, so it never changes the shape you already parse.
+   */
+  signals_unavailable?: string[];
   risk_score: number;
   verdict: Verdict;
   /**
@@ -321,6 +428,21 @@ export type UserResult = TestModeMarkers & {
   top_signals: string[];
   components_checked: string[];
   components: Record<string, unknown>;
+  /**
+   * What this call actually costs you, in credits.
+   *
+   * NOT `components_checked.length`. A unified call bills one credit per
+   * component, so a signup scored on IP + email + phone + domain is four, and
+   * a developer modelling spend off "one credit = one lookup" is out by up to
+   * 5x. Cached components are refunded and already subtracted here, so this is
+   * the number that reaches the bill rather than the number of things looked
+   * at — which also means it can be lower than `components_checked.length`.
+   *
+   * `BatchResult` has carried the same field since it was written; this type
+   * was the one that fell behind, and the SDK contract check against the live
+   * API is what noticed.
+   */
+  billable_lookups: number;
   request_id: string;
   processing_time_sec: number;
 };
@@ -386,12 +508,39 @@ export class LayerCallError extends Error {
   }
 }
 
+export type RuleAction = "allow" | "block";
+export type RuleKind = "ip" | "cidr" | "email" | "domain" | "phone" | "asn";
+
+export type Rule = {
+  id: string;
+  action: RuleAction;
+  kind: RuleKind;
+  value: string;
+  created_at: string;
+};
+
 export type ClientOptions = {
   apiKey: string;
   baseUrl?: string;
-  /** Per-attempt timeout in ms. Default 5000. */
+  /**
+   * Per-attempt timeout in ms. Default 30000 — deliberately longer than the
+   * endpoint's own ceiling.
+   *
+   * This was 5000, which is SHORTER than every endpoint's server-side budget:
+   * /v1/score/ip carries maxDuration 25, /v1/verify/email and /v1/score/user
+   * 15, /v1/batch 300. A cold start or a slow feed refresh therefore outlived
+   * the client's patience routinely, and the abandoned request kept running —
+   * finishing, metering a billable lookup, and returning to nobody.
+   *
+   * Set it lower if a signup path cannot wait; just pair it with `retries: 0`,
+   * or you are paying for answers you have already decided not to read.
+   */
   timeoutMs?: number;
-  /** Retries for 429 and 5xx only. Default 2. */
+  /**
+   * Retries for 429 and 5xx only. Default 2.
+   *
+   * A timeout is NOT retried, whatever this is set to. See the loop below.
+   */
   retries?: number;
   fetch?: typeof globalThis.fetch;
 };
@@ -400,6 +549,7 @@ export class LayerCall {
   private readonly key: string;
   private readonly base: string;
   private readonly timeoutMs: number;
+  private readonly batchTimeoutMs: number;
   private readonly retries: number;
   private readonly f: typeof globalThis.fetch;
 
@@ -416,7 +566,10 @@ export class LayerCall {
     }
     this.key = o.apiKey;
     this.base = (o.baseUrl ?? "https://www.layercall.com").replace(/\/$/, "");
-    this.timeoutMs = o.timeoutMs ?? 5000;
+    this.timeoutMs = o.timeoutMs ?? 30_000;
+    // /v1/batch alone budgets 300s server-side, so the default would abandon a
+    // large batch mid-flight and bill every item in it.
+    this.batchTimeoutMs = o.timeoutMs ?? 300_000;
     this.retries = o.retries ?? 2;
     this.f = o.fetch ?? globalThis.fetch;
   }
@@ -438,7 +591,7 @@ export class LayerCall {
             "User-Agent": `layercall-node/${VERSION}`,
             ...(init?.headers ?? {}),
           },
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(path === "/v1/batch" ? this.batchTimeoutMs : this.timeoutMs),
         });
 
         const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -457,6 +610,22 @@ export class LayerCall {
         lastErr = err;
       } catch (e) {
         if (e instanceof LayerCallError && !(e.status === 429 || e.status >= 500)) throw e;
+        /**
+         * A TIMEOUT IS NOT EVIDENCE THAT THE SERVER FAILED.
+         *
+         * It only says we stopped waiting. The request very likely arrived and
+         * is still being processed — and it will finish, meter a billable
+         * lookup, and return to nobody. Retrying it does not recover that
+         * lookup, it buys a second one. With the old 5s default against a
+         * 25-second endpoint budget, one logical call became three billable
+         * ones and the caller still got an error.
+         *
+         * A connection-level failure is different: refused, reset or DNS means
+         * the request never reached us, so a retry is free and worth making.
+         * Those still retry below.
+         */
+        const name = (e as { name?: string })?.name;
+        if (name === "TimeoutError" || name === "AbortError") throw e;
         lastErr = e;
         if (attempt === this.retries) break;
       }
@@ -470,8 +639,23 @@ export class LayerCall {
     return this.request<IpResult>("/v1/score/ip", { query: { ip, strictness: opts.strictness } });
   }
 
-  verifyEmail(email: string, opts: { strictness?: Strictness } = {}) {
-    return this.request<EmailResult>("/v1/verify/email", { query: { email, strictness: opts.strictness } });
+  /**
+   * @param opts.waitForMailbox Block until the SMTP mailbox probe finishes,
+   * rather than returning `mailbox_status: "pending"`.
+   *
+   * This is the documented remedy for a pending mailbox, and it was reachable
+   * only by hand-writing the HTTP call: the docs told a customer to pass
+   * `?wait_for_mailbox=true` and the recommended client had no way to. Costs
+   * 2-10 seconds on a cache miss, which is why it is opt-in.
+   */
+  verifyEmail(email: string, opts: { strictness?: Strictness; waitForMailbox?: boolean } = {}) {
+    return this.request<EmailResult>("/v1/verify/email", {
+      query: {
+        email,
+        strictness: opts.strictness,
+        wait_for_mailbox: opts.waitForMailbox ? "true" : undefined,
+      },
+    });
   }
 
   lookupPhone(phone: string, opts: { country?: string; strictness?: Strictness } = {}) {
@@ -480,8 +664,10 @@ export class LayerCall {
     });
   }
 
-  scoreDomain(domain: string) {
-    return this.request<DomainResult>("/v1/score/domain", { query: { domain } });
+  scoreDomain(domain: string, opts: { strictness?: Strictness } = {}) {
+    return this.request<DomainResult>("/v1/score/domain", {
+      query: { domain, strictness: opts.strictness },
+    });
   }
 
   /**
@@ -531,16 +717,24 @@ export class LayerCall {
    *
    * POST, never GET: a device id in a URL lands in access logs and Referer
    * headers, and that is a tracking identifier.
+   *
+   * `strictness` goes in the query string even though the rest is a body:
+   * every route reads it from the URL, POST ones included. It is destructured
+   * out of `input` rather than added to it, so it cannot end up in the JSON
+   * body where the route would not look for it.
    */
   scoreDevice(input: {
     device_id: string;
     ip?: string;
     signals?: Record<string, unknown>;
     automation?: Record<string, unknown>;
+    strictness?: Strictness;
   }) {
+    const { strictness, ...body } = input;
     return this.request<DeviceResult>("/v1/score/device", {
       method: "POST",
-      body: JSON.stringify(input),
+      query: { strictness },
+      body: JSON.stringify(body),
     });
   }
 
@@ -562,12 +756,6 @@ export class LayerCall {
     });
   }
 
-  /**
-   * Report a value as confirmed fraud, feeding the shared reputation network.
-   *
-   * Live keys only — a test key is refused, because test traffic must never
-   * teach the network something a suite invented.
-   */
   /**
    * Should this agent be allowed to do this, here?
    *
@@ -630,14 +818,97 @@ export class LayerCall {
     }>("/v1/outcome", { method: "POST", body: JSON.stringify(input) });
   }
 
-  // "device" is deliberately absent: /v1/report accepts ip, email, domain and
-  // phone, and 400s on anything else. Offering it in autocomplete meant the
-  // type suggested a call that could only ever fail — the one thing a typed
-  // client exists to prevent.
+  /**
+   * Report a value as confirmed fraud, feeding the shared reputation network.
+   *
+   * Live keys only — a test key is refused, because test traffic must never
+   * teach the network something a suite invented.
+   *
+   * "device" is deliberately absent from `kind`: /v1/report accepts ip, email,
+   * domain and phone, and 400s on anything else. Offering it in autocomplete
+   * meant the type suggested a call that could only ever fail — the one thing
+   * a typed client exists to prevent.
+   */
+  // The block above used to sit two doc comments deep over authorizeAgent,
+  // where only the second one binds. So the warning that this method refuses
+  // test keys shipped in dist/index.d.ts attached to nothing, and report()
+  // itself had no hover text at all: a developer wrote it into a test suite
+  // with a test key and got an unexplained rejection.
   report(kind: "ip" | "email" | "phone" | "domain", value: string, reason?: string) {
     return this.request<{ reported: number; results: Array<{ kind: string; abuse_reports: number }> }>(
       "/v1/report",
       { method: "POST", body: JSON.stringify({ kind, value, reason }) },
+    );
+  }
+
+  /**
+   * CUSTOM RULES — your lists always win.
+   *
+   * One of the nine products on the homepage, three endpoints, and until now
+   * no method in either SDK for any of them. A customer following our own
+   * advice to use the SDK found a promoted feature reachable only by
+   * hand-writing HTTP, and would reasonably conclude it was unfinished.
+   *
+   * A rule's kind (ip, cidr, email, domain, phone, asn) is detected from the
+   * value unless you force it.
+   */
+  listRules() {
+    return this.request<{ count: number; rules: Rule[] }>("/v1/rules");
+  }
+
+  /**
+   * Add one rule or many. Re-adding an existing rule is idempotent.
+   *
+   * @param values A single value or a list of them.
+   * @param opts.kind Force the kind rather than detecting it per value.
+   */
+  addRules(
+    action: RuleAction,
+    values: string | string[],
+    opts: { kind?: RuleKind } = {},
+  ) {
+    return this.request<{ added: number; skipped: Array<{ value: string; reason: string }>; rules: Rule[] }>(
+      "/v1/rules",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          action,
+          values: Array.isArray(values) ? values : [values],
+          ...(opts.kind ? { kind: opts.kind } : {}),
+        }),
+      },
+    );
+  }
+
+  /** Remove one rule by id. */
+  deleteRule(id: string) {
+    return this.request<{ deleted: boolean; id: string }>(`/v1/rules/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  /**
+   * Remove EVERY rule on the account.
+   *
+   * `confirm: true` is required by the API and deliberately not defaulted
+   * here — the whole point of the flag is that it cannot happen by accident,
+   * and an SDK that fills it in for you removes the guard.
+   */
+  clearRules(opts: { confirm: boolean }) {
+    if (!opts.confirm) {
+      throw new Error("LayerCall: clearRules deletes every rule on the account — pass { confirm: true }.");
+    }
+    return this.request<{ deleted: number }>("/v1/rules", {
+      method: "DELETE",
+      query: { confirm: "true" },
+    });
+  }
+
+  /** Import rules from pasted text — one value per line, or CSV. */
+  importRules(action: RuleAction, text: string, opts: { kind?: RuleKind } = {}) {
+    return this.request<{ added: number; skipped: Array<{ value: string; reason: string }> }>(
+      "/v1/rules/import",
+      { method: "POST", body: JSON.stringify({ action, text, ...(opts.kind ? { kind: opts.kind } : {}) }) },
     );
   }
 
