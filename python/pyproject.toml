@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "layercall"
-version = "1.2.8"
+version = "1.2.9"
 description = "Official LayerCall client — score an IP, email, phone, domain or a whole signup for fraud in one call. Zero dependencies."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -28,3 +28,11 @@ Source = "https://github.com/LayerCall/layercall-sdk"
 
 [tool.setuptools.packages.find]
 include = ["layercall*"]
+
+# PEP 561. Without this marker mypy and pyright in strict mode refuse to read
+# the annotations in __init__.py at all and report "missing library stubs or
+# py.typed marker" — so a fully typed, zero-dependency package looked untyped
+# to exactly the developers most likely to check. The annotations were always
+# there; type checkers were not allowed to see them.
+[tool.setuptools.package-data]
+layercall = ["py.typed"]

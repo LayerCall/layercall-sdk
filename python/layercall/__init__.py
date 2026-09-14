@@ -32,8 +32,12 @@ import urllib.parse
 import urllib.request
 from typing import Any, Literal, Mapping, Sequence
 
-__version__ = "1.2.8"
-__all__ = ["LayerCall", "LayerCallError"]
+__version__ = "1.2.9"
+# Verdict and Strictness are part of the signature — `verdict: Verdict` and
+# `strictness: Strictness` appear on the public methods below — so a caller
+# writing a type annotation needs them, and `from layercall import *` was not
+# giving them out.
+__all__ = ["LayerCall", "LayerCallError", "Verdict", "Strictness"]
 
 Verdict = Literal["allow", "review", "block"]
 Strictness = Literal[0, 1, 2, 3]

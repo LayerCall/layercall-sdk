@@ -53,7 +53,13 @@ lc.verify_email("someone@mailinator.com")
 lc.lookup_phone("+14155552671")
 lc.lookup_phone("4155552671", country="US")
 lc.score_domain("example.com")
-lc.score_device(device_id, ip=ip, signals=signals)   # fingerprint from /fp.js
+# score_device is the one method you cannot try without a browser: it needs a
+# real fingerprint and the API correctly refuses anything else. On a TEST key
+# these two fixtures work verbatim, so you can call it today and wire up
+# /fp.js afterwards.
+lc.score_device("0" * 32)                            # clean browser
+lc.score_device("f" * 32)                            # headless automation
+lc.score_device(device_id, ip=ip, signals=signals)   # real: fingerprint from /fp.js
 lc.score_user(ip=ip, email=email, phone=phone, device_id=device_id)
 lc.batch("email", ["a@x.com", "b@y.com"])            # up to 500
 

@@ -57,7 +57,13 @@ await lc.verifyEmail("someone@mailinator.com");
 await lc.lookupPhone("+14155552671");
 await lc.lookupPhone("4155552671", { country: "US" });
 await lc.scoreDomain("example.com");
-await lc.scoreDevice({ device_id, ip, signals });   // fingerprint from /fp.js
+// scoreDevice is the one method you cannot try without a browser: it needs a
+// real fingerprint and the API correctly refuses anything else. On a TEST key
+// these two fixtures work verbatim, so the line below is copy-pasteable today
+// and you can wire up /fp.js afterwards.
+await lc.scoreDevice({ device_id: "0".repeat(32) });               // clean browser
+await lc.scoreDevice({ device_id: "f".repeat(32) });               // headless automation
+await lc.scoreDevice({ device_id, ip, signals });   // real: fingerprint from /fp.js
 await lc.scoreUser({ ip, email, phone, device_id });
 await lc.batch("email", ["a@x.com", "b@y.com"]);   // up to 500
 

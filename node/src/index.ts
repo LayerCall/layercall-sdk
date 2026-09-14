@@ -19,7 +19,7 @@
  * years of changes ago, so the one field that says which client a customer
  * runs was useless for exactly the question it exists to answer.
  */
-const VERSION = "1.2.8";
+const VERSION = "1.2.9";
 
 export type Verdict = "allow" | "review" | "block";
 
@@ -42,6 +42,35 @@ export type TestModeMarkers = {
   test_mode?: true;
   /** Human-readable explanation of why the values are fabricated. */
   test_mode_note?: string;
+};
+
+/**
+ * WHAT EVERY SCORED RESPONSE CARRIES, declared once so a new result type
+ * cannot be written without it.
+ *
+ * These three drifted apart because each result type listed them by hand.
+ * Measured against the live API on 10 September 2026: billable_lookups was on
+ * 2 of 8 types, request_id on 6, processing_time_sec on 5 - while the API
+ * returns all three on every scoring endpoint. Six types were missing
+ * billable_lookups, and DeviceResult and AgentResult were missing all three.
+ *
+ * That mattered beyond tidiness. /pricing sells billable_lookups as the reason
+ * "you never have to guess" about spend, and both competitor comparison pages
+ * cite it as a checkable advantage - so the one thing the marketing points at
+ * was a compile error for any TypeScript customer who tried to read it.
+ *
+ * It had happened before: a fix on 31 August added it to UserResult and audited
+ * the class, a change on 3 September rolled the field out to every endpoint,
+ * and the types fell behind again. A list maintained by memory drifts; an
+ * intersection cannot. Adding a result type now inherits these by construction.
+ */
+export type ScoredEnvelope = {
+  /** Billable lookups this call consumed. Cached and test-mode calls are 0. */
+  billable_lookups: number;
+  /** Server-side id for this request. Quote it in a support message. */
+  request_id: string;
+  /** Wall-clock seconds spent producing this answer. */
+  processing_time_sec: number;
 };
 
 /** 0 lenient · 1 balanced (default) · 2 strict · 3 paranoid. */
@@ -140,7 +169,7 @@ export type Outcome = "fraud" | "legitimate";
 // directions on every CI run. Add a field to a response and it fails until the
 // type follows.
 
-export type IpResult = TestModeMarkers & {
+export type IpResult = TestModeMarkers & ScoredEnvelope & {
   /**
    * Signals that could NOT be measured on this request, omitted entirely when
    * everything answered.
@@ -149,6 +178,27 @@ export type IpResult = TestModeMarkers & {
    * used to be the same bytes on the wire. Branch on this when a false
    * negative matters: `if (res.signals_unavailable) …` — the key is absent on
    * the happy path, so it never changes the shape you already parse.
+   *
+   * IT IS NOT ALWAYS AN OUTAGE, AND A FAIL-CLOSED BRANCH WILL NOTICE.
+   *
+   * Two different facts arrive under this one key, deliberately, because for
+   * you they have the same consequence — a signal you can see in the response
+   * was not measured, so a clean answer is not evidence of cleanliness:
+   *
+   *   something was down        transient. It clears.
+   *   nothing covers this input permanent for that input. It does not clear.
+   *
+   * The second is not hypothetical and it is not rare. Five of the IP feeds
+   * are IPv4-only, so EVERY IPv6 address carries ip_reputation, cloud_ranges,
+   * hijacked_ranges, abuse_reports and vpn_providers here, on every request,
+   * forever. Mobile carriers are heavily IPv6, so that is ordinary signup
+   * traffic — and an integration that sends everything with this key present
+   * to manual review will send a large and permanent share of its signups
+   * there.
+   *
+   * So: treat it as "this particular signal is unproven", not as "LayerCall is
+   * degraded". Deciding per NAME is the robust reading — if you are screening
+   * for Tor and `tor` is not in the list, the Tor check ran.
    */
   signals_unavailable?: string[];
   ip: string;
@@ -183,7 +233,7 @@ export type IpResult = TestModeMarkers & {
   processing_time_sec: number;
 };
 
-export type EmailResult = TestModeMarkers & {
+export type EmailResult = TestModeMarkers & ScoredEnvelope & {
   /**
    * Signals that could NOT be measured on this request, omitted entirely when
    * everything answered.
@@ -192,6 +242,27 @@ export type EmailResult = TestModeMarkers & {
    * used to be the same bytes on the wire. Branch on this when a false
    * negative matters: `if (res.signals_unavailable) …` — the key is absent on
    * the happy path, so it never changes the shape you already parse.
+   *
+   * IT IS NOT ALWAYS AN OUTAGE, AND A FAIL-CLOSED BRANCH WILL NOTICE.
+   *
+   * Two different facts arrive under this one key, deliberately, because for
+   * you they have the same consequence — a signal you can see in the response
+   * was not measured, so a clean answer is not evidence of cleanliness:
+   *
+   *   something was down        transient. It clears.
+   *   nothing covers this input permanent for that input. It does not clear.
+   *
+   * The second is not hypothetical and it is not rare. Five of the IP feeds
+   * are IPv4-only, so EVERY IPv6 address carries ip_reputation, cloud_ranges,
+   * hijacked_ranges, abuse_reports and vpn_providers here, on every request,
+   * forever. Mobile carriers are heavily IPv6, so that is ordinary signup
+   * traffic — and an integration that sends everything with this key present
+   * to manual review will send a large and permanent share of its signups
+   * there.
+   *
+   * So: treat it as "this particular signal is unproven", not as "LayerCall is
+   * degraded". Deciding per NAME is the robust reading — if you are screening
+   * for Tor and `tor` is not in the list, the Tor check ran.
    */
   signals_unavailable?: string[];
   /**
@@ -244,8 +315,14 @@ export type EmailResult = TestModeMarkers & {
      * Returned by the API and asserted in the scoring invariants since it
      * shipped, but missing from this type until 1.2.3, so TypeScript callers
      * had to cast to reach it.
+     *
+     * NULL MEANS WE DID NOT LOOK, and it is the common case: the check is
+     * skipped for any domain publishing SPF or DMARC, which is most of them.
+     * This was typed `boolean` while the API could already answer null on a
+     * slow request, so the type was a promise the server had never made.
+     * Branch on `=== false` for "no site", never on falsiness.
      */
-    has_website: boolean;
+    has_website: boolean | null;
     /** null = the provider does not answer honestly; never a guess. */
     mailbox_exists: boolean | null;
     /**
@@ -297,7 +374,7 @@ export type EmailResult = TestModeMarkers & {
   request_id: string;
 };
 
-export type PhoneResult = TestModeMarkers & {
+export type PhoneResult = TestModeMarkers & ScoredEnvelope & {
   /**
    * Reputation-network history, as IpResult and EmailResult have carried all
    * along. Added to phone and domain on 2026-08-19, when both joined the
@@ -357,7 +434,7 @@ export type PhoneResult = TestModeMarkers & {
   request_id: string;
 };
 
-export type DomainResult = TestModeMarkers & {
+export type DomainResult = TestModeMarkers & ScoredEnvelope & {
   /**
    * Reputation-network history, as IpResult and EmailResult have carried all
    * along. Added to phone and domain on 2026-08-19, when both joined the
@@ -380,6 +457,27 @@ export type DomainResult = TestModeMarkers & {
    * used to be the same bytes on the wire. Branch on this when a false
    * negative matters: `if (res.signals_unavailable) …` — the key is absent on
    * the happy path, so it never changes the shape you already parse.
+   *
+   * IT IS NOT ALWAYS AN OUTAGE, AND A FAIL-CLOSED BRANCH WILL NOTICE.
+   *
+   * Two different facts arrive under this one key, deliberately, because for
+   * you they have the same consequence — a signal you can see in the response
+   * was not measured, so a clean answer is not evidence of cleanliness:
+   *
+   *   something was down        transient. It clears.
+   *   nothing covers this input permanent for that input. It does not clear.
+   *
+   * The second is not hypothetical and it is not rare. Five of the IP feeds
+   * are IPv4-only, so EVERY IPv6 address carries ip_reputation, cloud_ranges,
+   * hijacked_ranges, abuse_reports and vpn_providers here, on every request,
+   * forever. Mobile carriers are heavily IPv6, so that is ordinary signup
+   * traffic — and an integration that sends everything with this key present
+   * to manual review will send a large and permanent share of its signups
+   * there.
+   *
+   * So: treat it as "this particular signal is unproven", not as "LayerCall is
+   * degraded". Deciding per NAME is the robust reading — if you are screening
+   * for Tor and `tor` is not in the list, the Tor check ran.
    */
   signals_unavailable?: string[];
   /**
@@ -413,7 +511,7 @@ export type DomainResult = TestModeMarkers & {
   request_id: string;
 };
 
-export type UserResult = TestModeMarkers & {
+export type UserResult = TestModeMarkers & ScoredEnvelope & {
   /**
    * Signals that could NOT be measured on this request, omitted entirely when
    * everything answered.
@@ -422,6 +520,27 @@ export type UserResult = TestModeMarkers & {
    * used to be the same bytes on the wire. Branch on this when a false
    * negative matters: `if (res.signals_unavailable) …` — the key is absent on
    * the happy path, so it never changes the shape you already parse.
+   *
+   * IT IS NOT ALWAYS AN OUTAGE, AND A FAIL-CLOSED BRANCH WILL NOTICE.
+   *
+   * Two different facts arrive under this one key, deliberately, because for
+   * you they have the same consequence — a signal you can see in the response
+   * was not measured, so a clean answer is not evidence of cleanliness:
+   *
+   *   something was down        transient. It clears.
+   *   nothing covers this input permanent for that input. It does not clear.
+   *
+   * The second is not hypothetical and it is not rare. Five of the IP feeds
+   * are IPv4-only, so EVERY IPv6 address carries ip_reputation, cloud_ranges,
+   * hijacked_ranges, abuse_reports and vpn_providers here, on every request,
+   * forever. Mobile carriers are heavily IPv6, so that is ordinary signup
+   * traffic — and an integration that sends everything with this key present
+   * to manual review will send a large and permanent share of its signups
+   * there.
+   *
+   * So: treat it as "this particular signal is unproven", not as "LayerCall is
+   * degraded". Deciding per NAME is the robust reading — if you are screening
+   * for Tor and `tor` is not in the list, the Tor check ran.
    */
   signals_unavailable?: string[];
   risk_score: number;
@@ -463,7 +582,7 @@ export type UserResult = TestModeMarkers & {
   processing_time_sec: number;
 };
 
-export type DeviceResult = TestModeMarkers & {
+export type DeviceResult = TestModeMarkers & ScoredEnvelope & {
   device_id: string;
   risk_score: number;
   verdict: Verdict;
@@ -481,7 +600,7 @@ export type DeviceResult = TestModeMarkers & {
 };
 
 /** Web Bot Auth. `verified` is cryptographic proof, not an inference. */
-export type AgentResult = TestModeMarkers & {
+export type AgentResult = TestModeMarkers & ScoredEnvelope & {
   verified: boolean;
   /** e.g. "https://chatgpt.com". Present even when verification fails. */
   agent: string | null;
@@ -491,14 +610,48 @@ export type AgentResult = TestModeMarkers & {
   /** Why it failed. null when verified. */
   reason: string | null;
   expires_in: number | null;
+  /**
+   * How replay is prevented — "signature-window" today.
+   *
+   * Returned unconditionally by app/v1/verify/agent/route.ts:65 and by the
+   * test fixture, and it was undeclared here, so `result.replay_protection`
+   * failed to compile for a TypeScript customer. The 13 September 2026 audit
+   * caught it in the fix that was already waiting to ship, which is the
+   * cheaper place to catch it than in the release after.
+   */
+  replay_protection: string;
+  /** Where the verification scheme is documented. */
+  docs: string;
 };
 
-export type BatchResult<T> = {
+/**
+ * INTERSECTS TestModeMarkers, because a test-mode batch carries them.
+ *
+ * Verified against production on 13 September 2026 with a tl_test_ key: POST
+ * /v1/batch returns mode, test_mode and test_mode_note alongside its counters.
+ * They were undeclared here, so a customer could not check whether they were
+ * still on a test key from a batch response — the one call most likely to be
+ * the first thing they run at volume.
+ *
+ * It does NOT intersect ScoredEnvelope: a batch is not shaped like a scored
+ * response. Verified 10 September 2026 — it returns processing_time_sec but no
+ * request_id, so inheriting the envelope would promise a field that never
+ * arrives.
+ */
+export type BatchResult<T> = TestModeMarkers & {
   type: string;
   count: number;
   succeeded: number;
   failed: number;
   billable_lookups: number;
+  /**
+   * Wall-clock seconds for the whole batch. Declared here rather than inherited
+   * from ScoredEnvelope because a batch is NOT shaped like a scored response:
+   * verified against the live endpoint on 10 September 2026, POST /v1/batch
+   * returns processing_time_sec but no request_id, so intersecting the envelope
+   * would have promised a field that never arrives.
+   */
+  processing_time_sec: number;
   results: Array<({ input: string } & T) | { input: string; error: string }>;
 };
 
@@ -583,9 +736,26 @@ export class LayerCall {
     this.key = o.apiKey;
     this.base = (o.baseUrl ?? "https://www.layercall.com").replace(/\/$/, "");
     this.timeoutMs = o.timeoutMs ?? 30_000;
-    // /v1/batch alone budgets 300s server-side, so the default would abandon a
-    // large batch mid-flight and bill every item in it.
-    this.batchTimeoutMs = o.timeoutMs ?? 300_000;
+    /**
+     * A FLOOR, not a fallback — and the comment above was already describing
+     * the floor while the code did the opposite.
+     *
+     * `o.timeoutMs ?? 300_000` uses the caller's general timeout for batches
+     * whenever they set one. So a developer following this SDK's own docstring
+     * advice to set a low timeout on a signup path — say 3 seconds — got a
+     * 3-second timeout on /v1/batch too, and every batch was abandoned
+     * mid-flight. Server-side that used to mean it was billed in full anyway;
+     * that hole is now closed, but the client should never have been aiming a
+     * signup-path timeout at a 500-item batch in the first place.
+     *
+     * The Python SDK has always had this right: `max(timeout, 300.0)`. The two
+     * clients disagreed, and the more popular one was the wrong one.
+     *
+     * Only helps NEW installs — an existing lockfile pins the old version
+     * forever, which is why the server-side abandonment check is the fix that
+     * actually matters. See lib/sdkIsNotADeliveryMechanism in the notes.
+     */
+    this.batchTimeoutMs = Math.max(o.timeoutMs ?? 0, 300_000);
     this.retries = o.retries ?? 2;
     this.f = o.fetch ?? globalThis.fetch;
   }
