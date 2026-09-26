@@ -19,7 +19,7 @@
  * years of changes ago, so the one field that says which client a customer
  * runs was useless for exactly the question it exists to answer.
  */
-const VERSION = "1.2.9";
+const VERSION = "1.2.11";
 
 export type Verdict = "allow" | "review" | "block";
 
@@ -44,9 +44,10 @@ export type TestModeMarkers = {
   test_mode_note?: string;
 };
 
-/**
- * WHAT EVERY SCORED RESPONSE CARRIES, declared once so a new result type
- * cannot be written without it.
+/*
+ * Declared once so a new result type cannot be written without it. Kept out
+ * of the doc comment below on purpose: that one is what a customer's editor
+ * shows, and this history is ours.
  *
  * These three drifted apart because each result type listed them by hand.
  * Measured against the live API on 10 September 2026: billable_lookups was on
@@ -64,6 +65,7 @@ export type TestModeMarkers = {
  * and the types fell behind again. A list maintained by memory drifts; an
  * intersection cannot. Adding a result type now inherits these by construction.
  */
+/** What every scored response carries: what it cost, its id, and how long it took. */
 export type ScoredEnvelope = {
   /** Billable lookups this call consumed. Cached and test-mode calls are 0. */
   billable_lookups: number;
@@ -304,6 +306,13 @@ export type EmailResult = TestModeMarkers & ScoredEnvelope & {
     has_spf: boolean;
     /** Domain publishes a DMARC policy. */
     has_dmarc: boolean;
+    /*
+     * Returned by the API and asserted in the scoring invariants since it
+     * shipped, but missing from this type until 1.2.3, so TypeScript callers
+     * had to cast to reach it. And it was typed `boolean` while the API could
+     * already answer null on a slow request, so the type was a promise the
+     * server had never made.
+     */
     /**
      * Domain serves a website.
      *
@@ -312,14 +321,8 @@ export type EmailResult = TestModeMarkers & ScoredEnvelope & {
      * legitimate domains are mail-only — which is why it is a signal you can
      * read rather than something that moves the score by itself.
      *
-     * Returned by the API and asserted in the scoring invariants since it
-     * shipped, but missing from this type until 1.2.3, so TypeScript callers
-     * had to cast to reach it.
-     *
-     * NULL MEANS WE DID NOT LOOK, and it is the common case: the check is
+     * null means we did not look, and it is the common case: the check is
      * skipped for any domain publishing SPF or DMARC, which is most of them.
-     * This was typed `boolean` while the API could already answer null on a
-     * slow request, so the type was a promise the server had never made.
      * Branch on `=== false` for "no site", never on falsiness.
      */
     has_website: boolean | null;
@@ -375,11 +378,11 @@ export type EmailResult = TestModeMarkers & ScoredEnvelope & {
 };
 
 export type PhoneResult = TestModeMarkers & ScoredEnvelope & {
+  /* Added to phone and domain on 2026-08-19, when both joined the network:
+     until then a customer could label either through reportOutcome() and it
+     credited nothing. */
   /**
-   * Reputation-network history, as IpResult and EmailResult have carried all
-   * along. Added to phone and domain on 2026-08-19, when both joined the
-   * network: until then a customer could label either through reportOutcome()
-   * and it credited nothing.
+   * Reputation-network history, as on IpResult and EmailResult.
    *
    * abuse_reports is the one to branch on — it counts confirmed fraud reports
    * from across the network, not lookups. times_seen feeds the score for a
@@ -415,10 +418,16 @@ export type PhoneResult = TestModeMarkers & ScoredEnvelope & {
   signals: {
     syntax_valid: boolean;
     is_possible: boolean;
-    is_voip: boolean;
+    /**
+     * null where the country's numbering plan reserves no VoIP range (the US,
+     * India, Germany and others), or the number is only "fixed line or
+     * mobile": unknown, not "no".
+     */
+    is_voip: boolean | null;
     is_premium_rate: boolean;
     is_toll_free: boolean;
-    assigned_area_code: boolean;
+    /** NANP only: null outside +1, where there are no area codes to check. */
+    assigned_area_code: boolean | null;
     /** Reserved for fiction (555-0100..0199) and never assignable. */
     is_fictional: boolean | null;
   };
@@ -435,11 +444,11 @@ export type PhoneResult = TestModeMarkers & ScoredEnvelope & {
 };
 
 export type DomainResult = TestModeMarkers & ScoredEnvelope & {
+  /* Added to phone and domain on 2026-08-19, when both joined the network:
+     until then a customer could label either through reportOutcome() and it
+     credited nothing. */
   /**
-   * Reputation-network history, as IpResult and EmailResult have carried all
-   * along. Added to phone and domain on 2026-08-19, when both joined the
-   * network: until then a customer could label either through reportOutcome()
-   * and it credited nothing.
+   * Reputation-network history, as on IpResult and EmailResult.
    *
    * abuse_reports is the one to branch on — it counts confirmed fraud reports
    * from across the network, not lookups. times_seen feeds the score for a
@@ -610,21 +619,16 @@ export type AgentResult = TestModeMarkers & ScoredEnvelope & {
   /** Why it failed. null when verified. */
   reason: string | null;
   expires_in: number | null;
-  /**
-   * How replay is prevented — "signature-window" today.
-   *
-   * Returned unconditionally by app/v1/verify/agent/route.ts:65 and by the
-   * test fixture, and it was undeclared here, so `result.replay_protection`
-   * failed to compile for a TypeScript customer. The 13 September 2026 audit
-   * caught it in the fix that was already waiting to ship, which is the
-   * cheaper place to catch it than in the release after.
-   */
+  /* Returned unconditionally by the endpoint and by the test fixture, and it
+     was undeclared here, so `result.replay_protection` failed to compile for a
+     TypeScript customer until the 13 September 2026 audit. */
+  /** How replay is prevented — "signature-window" today. */
   replay_protection: string;
   /** Where the verification scheme is documented. */
   docs: string;
 };
 
-/**
+/*
  * INTERSECTS TestModeMarkers, because a test-mode batch carries them.
  *
  * Verified against production on 13 September 2026 with a tl_test_ key: POST
@@ -638,19 +642,19 @@ export type AgentResult = TestModeMarkers & ScoredEnvelope & {
  * request_id, so inheriting the envelope would promise a field that never
  * arrives.
  */
+/** One batch call: its counters, a result or error per input, and on a test key the test-mode markers. */
 export type BatchResult<T> = TestModeMarkers & {
   type: string;
   count: number;
   succeeded: number;
   failed: number;
   billable_lookups: number;
-  /**
-   * Wall-clock seconds for the whole batch. Declared here rather than inherited
-   * from ScoredEnvelope because a batch is NOT shaped like a scored response:
-   * verified against the live endpoint on 10 September 2026, POST /v1/batch
-   * returns processing_time_sec but no request_id, so intersecting the envelope
-   * would have promised a field that never arrives.
-   */
+  /* Declared here rather than inherited from ScoredEnvelope because a batch is
+     NOT shaped like a scored response: verified against the live endpoint on 10
+     September 2026, POST /v1/batch returns processing_time_sec but no
+     request_id, so intersecting the envelope would have promised a field that
+     never arrives. */
+  /** Wall-clock seconds for the whole batch. */
   processing_time_sec: number;
   results: Array<({ input: string } & T) | { input: string; error: string }>;
 };
@@ -691,15 +695,14 @@ export type Rule = {
 export type ClientOptions = {
   apiKey: string;
   baseUrl?: string;
+  /* This was 5000, which is SHORTER than every endpoint's server-side budget:
+     /v1/score/ip carries maxDuration 25, /v1/verify/email and /v1/score/user
+     15, /v1/batch 300. A cold start or a slow feed refresh therefore outlived
+     the client's patience routinely, and the abandoned request kept running —
+     finishing, metering a billable lookup, and returning to nobody. */
   /**
-   * Per-attempt timeout in ms. Default 30000 — deliberately longer than the
-   * endpoint's own ceiling.
-   *
-   * This was 5000, which is SHORTER than every endpoint's server-side budget:
-   * /v1/score/ip carries maxDuration 25, /v1/verify/email and /v1/score/user
-   * 15, /v1/batch 300. A cold start or a slow feed refresh therefore outlived
-   * the client's patience routinely, and the abandoned request kept running —
-   * finishing, metering a billable lookup, and returning to nobody.
+   * Per-attempt timeout in ms. Default 30000, longer than any endpoint's own
+   * ceiling, so a slow answer is not abandoned after it has been billed.
    *
    * Set it lower if a signup path cannot wait; just pair it with `retries: 0`,
    * or you are paying for answers you have already decided not to read.

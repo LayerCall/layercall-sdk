@@ -30,6 +30,15 @@ if (result.verdict === "review") {
 }
 ```
 
+CommonJS works too, from 1.2.11:
+
+```js
+const { LayerCall } = require("layercall");
+```
+
+Up to 1.2.9 the package was ESM only, and `require` fails with
+`ERR_PACKAGE_PATH_NOT_EXPORTED`. Upgrade, or use `await import("layercall")`.
+
 [Get a free API key](https://www.layercall.com/get-key) — 1,000 lookups a
 month, no card.
 
