@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Literal, Mapping, Sequence
 
-__version__ = "1.2.11"
+__version__ = "1.2.12"
 # Verdict and Strictness are part of the signature — `verdict: Verdict` and
 # `strictness: Strictness` appear on the public methods below — so a caller
 # writing a type annotation needs them, and `from layercall import *` was not
@@ -51,11 +51,14 @@ class LayerCallError(Exception):
     def __init__(
         self,
         message: str,
-        status: int,
+        status: int = 0,
         code: str | None = None,
         request_id: str | None = None,
     ) -> None:
+        # status defaults to 0 (no HTTP response) so a test can raise
+        # LayerCallError("boom") the way it can in the Node SDK.
         super().__init__(message)
+        self.message = message
         self.status = status
         self.code = code
         self.request_id = request_id
@@ -70,8 +73,16 @@ class LayerCallError(Exception):
         """Bad or revoked key."""
         return self.status in (401, 403)
 
+    def __str__(self) -> str:
+        # print(err) is what a newcomer does first, and it showed only the
+        # message - not the status or code they are told to branch on.
+        bits = [f"HTTP {self.status}"] if self.status else []
+        if self.code:
+            bits.append(self.code)
+        return f"{self.message} ({', '.join(bits)})" if bits else self.message
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"LayerCallError(status={self.status}, code={self.code!r}, message={self!s})"
+        return f"LayerCallError(status={self.status}, code={self.code!r}, message={self.message!r})"
 
 
 class LayerCall:
@@ -239,6 +250,11 @@ class LayerCall:
             "/v1/lookup/phone",
             query={"phone": phone, "country": country, "strictness": strictness},
         )
+
+    # score_email / score_phone are the names a newcomer guesses, since the
+    # other identifiers are score_*. Aliases, so existing code keeps working.
+    score_email = verify_email
+    score_phone = lookup_phone
 
     def score_domain(self, domain: str, *, strictness: Strictness | None = None) -> dict[str, Any]:
         """RDAP registration date, registrar, MX/SPF/DMARC, risky TLD."""
@@ -428,7 +444,9 @@ class LayerCall:
             if v is not None
         }
         if not payload:
-            raise ValueError("score_user: provide at least one of ip, email or phone.")
+            raise ValueError(
+                "score_user: provide at least one of ip, email, phone, domain or device_id."
+            )
         return self._request("/v1/score/user", body=payload)
 
     # -- custom rules -----------------------------------------------------
@@ -494,12 +512,24 @@ class LayerCall:
     def batch(
         self,
         type: Literal["ip", "email", "phone", "domain"],
-        items: Sequence[str],
+        items: Sequence[str] | None = None,
         *,
         strictness: Strictness | None = None,
         phone_country: str | None = None,
     ) -> dict[str, Any]:
-        """Up to 500 values of one type. Each item carries its own error."""
+        """Up to 500 values of one type. Each item carries its own error.
+
+            lc.batch("email", ["a@x.com", "b@y.com"])
+        """
+        # The natural first guess is a list of {"type", "value"} dicts, and it
+        # used to fail with a bare "missing 1 required positional argument".
+        # ValueError, not TypeError: the call-every-method test reads a
+        # TypeError as "this method can never reach the network".
+        if not isinstance(type, str) or items is None:
+            raise ValueError(
+                'batch takes the type once, then the values: '
+                'lc.batch("ip", ["8.8.8.8", "1.1.1.1"])'
+            )
         if len(items) > 500:
             raise ValueError(
                 f"batch: {len(items)} items exceeds the limit of 500 — send several batches."

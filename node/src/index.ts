@@ -19,7 +19,7 @@
  * years of changes ago, so the one field that says which client a customer
  * runs was useless for exactly the question it exists to answer.
  */
-const VERSION = "1.2.11";
+const VERSION = "1.2.12";
 
 export type Verdict = "allow" | "review" | "block";
 
@@ -851,6 +851,16 @@ export class LayerCall {
     return this.request<PhoneResult>("/v1/lookup/phone", {
       query: { phone, country: opts.country, strictness: opts.strictness },
     });
+  }
+
+  /** Alias of {@link verifyEmail}. The other identifiers are score*, so this is the name people guess. */
+  scoreEmail(email: string, opts: { strictness?: Strictness; waitForMailbox?: boolean } = {}) {
+    return this.verifyEmail(email, opts);
+  }
+
+  /** Alias of {@link lookupPhone}, for the same reason as scoreEmail. */
+  scorePhone(phone: string, opts: { country?: string; strictness?: Strictness } = {}) {
+    return this.lookupPhone(phone, opts);
   }
 
   scoreDomain(domain: string, opts: { strictness?: Strictness } = {}) {

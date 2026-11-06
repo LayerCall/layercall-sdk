@@ -248,7 +248,13 @@ await check("both SDKs expose the same methods", () => {
     .map((m) => m[1])
     .filter((m) => m !== "constructor" && !m.startsWith("_"));
   const toSnake = (s) => s.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
-  const pyMethods = new Set([...py.matchAll(/^ {4}def (\w+)\(/gm)].map((m) => m[1]).filter((m) => !m.startsWith("_")));
+  // A class-level alias (`score_email = verify_email`) IS a method on the Python client. Counting only
+  // `def` lines failed verify on 5 Nov 2026 with "Python is missing: score_email, score_phone" while
+  // sdk-python/layercall/__init__.py:256-257 defines both. The alias counts only when its target is a
+  // real method, so a typo'd target is still reported missing.
+  const pyDefs = new Set([...py.matchAll(/^ {4}def (\w+)\(/gm)].map((m) => m[1]));
+  const pyAliases = [...py.matchAll(/^ {4}([a-z]\w*) = ([a-z]\w*)\s*$/gm)].filter((m) => pyDefs.has(m[2])).map((m) => m[1]);
+  const pyMethods = new Set([...pyDefs, ...pyAliases].filter((m) => !m.startsWith("_")));
   if (nodeMethods.length < 4) throw new Error(`parsed only ${nodeMethods.length} Node methods — the regex has drifted`);
   const missing = nodeMethods.map(toSnake).filter((m) => !pyMethods.has(m));
   if (missing.length) {

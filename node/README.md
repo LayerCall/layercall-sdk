@@ -63,7 +63,9 @@ review queue.
 ```ts
 await lc.scoreIp("185.220.101.1");
 await lc.verifyEmail("someone@mailinator.com");
+await lc.scoreEmail("someone@mailinator.com");    // the same call, by the name people guess
 await lc.lookupPhone("+14155552671");
+await lc.scorePhone("+14155552671");               // the same call, likewise
 await lc.lookupPhone("4155552671", { country: "US" });
 await lc.scoreDomain("example.com");
 // scoreDevice is the one method you cannot try without a browser: it needs a

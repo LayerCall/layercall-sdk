@@ -50,7 +50,9 @@ different lever: a limited account state, a delayed payout, or a review queue.
 ```python
 lc.score_ip("185.220.101.1")
 lc.verify_email("someone@mailinator.com")
+lc.score_email("someone@mailinator.com")             # the same call, by the name people guess
 lc.lookup_phone("+14155552671")
+lc.score_phone("+14155552671")                       # the same call, likewise
 lc.lookup_phone("4155552671", country="US")
 lc.score_domain("example.com")
 # score_device is the one method you cannot try without a browser: it needs a
