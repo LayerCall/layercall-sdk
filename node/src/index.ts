@@ -19,7 +19,7 @@
  * years of changes ago, so the one field that says which client a customer
  * runs was useless for exactly the question it exists to answer.
  */
-const VERSION = "1.2.12";
+const VERSION = "1.2.13";
 
 export type Verdict = "allow" | "review" | "block";
 
@@ -292,6 +292,8 @@ export type EmailResult = TestModeMarkers & ScoredEnvelope & {
     mx_found: boolean;
     is_disposable: boolean;
     is_homograph: boolean;
+    /** The domain spells a well-known brand with swapped characters, e.g. paypa1.com. */
+    is_brand_lookalike: boolean;
     is_role_account: boolean;
     is_free_provider: boolean;
     is_suspicious_handle: boolean;
@@ -509,6 +511,8 @@ export type DomainResult = TestModeMarkers & ScoredEnvelope & {
     has_dmarc: boolean;
     is_disposable: boolean;
     is_homograph: boolean;
+    /** The domain spells a well-known brand with swapped characters, e.g. paypa1.com. */
+    is_brand_lookalike: boolean;
     is_free_provider: boolean;
     is_risky_tld: boolean;
     /** null = registration date unavailable (no RDAP for that TLD). */
